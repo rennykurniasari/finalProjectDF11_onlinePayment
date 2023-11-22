@@ -1,0 +1,55 @@
+{
+  "namespace": "example.avro",
+  "type": "record",
+  "name": "Transaction",
+  "fields": [
+    {
+      "name": "idTransaction",
+      "type": "string"
+    },
+    {
+      "name": "timestamp",
+      "type": "string"
+    },
+    {
+      "name": "type",
+      "type": "string"
+    },
+    {
+      "name": "amount",
+      "type": "float"
+    },
+    {
+      "name": "nameOrigin",
+      "type": "string"
+    },
+    {
+      "name": "oldBalanceOrigin",
+      "type": "float"
+    },
+    {
+      "name": "newBalanceOrigin",
+      "type": "float"
+    },
+    {
+      "name": "nameDest",
+      "type": "string"
+    },
+    {
+      "name": "oldBalanceDest",
+      "type": "float"
+    },
+    {
+      "name": "newBalanceDest",
+      "type": "float"
+    },
+    {
+      "name": "isFraud",
+      "type": "int"
+    },
+    {
+      "name": "isFlaggedFraud",
+      "type": "int"
+    }
+  ]
+}

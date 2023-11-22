@@ -1,0 +1,8 @@
+confluent-kafka
+avro 
+urllib3 
+requests
+fastavro
+google-cloud-storage
+aiohttp
+aiofiles
