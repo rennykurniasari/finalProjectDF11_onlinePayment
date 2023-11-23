@@ -15,4 +15,4 @@ batch_processing/infrastructure/terraform.tfstate.backup
 batch_processing/infrastructure/.terraform.lock.hcl
 batch_processing/infrastructure/.terraform/
 batch_processing/dags/__pycache__
-batch_processing/logs
+batch_processing/logs/
