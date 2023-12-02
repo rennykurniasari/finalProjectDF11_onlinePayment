@@ -1,0 +1,185 @@
+version: 2
+
+models:
+  - name: fraud_transaction
+    description: "Selects fraudulent transactions with specific criteria such as isFraud and isTrueFraud flags set to 1."
+    columns:
+      - name: idTransaction
+        description: "The unique identifier for each transaction."
+        tests:
+          - not_null
+      - name: isFraud
+        description: "Flag indicating if the transaction is fraudulent."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+      - name: isTrueFraud
+        description: "Flag indicating if the transaction is truly fraudulent."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+      - name: refund
+        description: "Indicates whether the transaction was refunded."
+      - name: confirm
+        description: "Confirmation status of the transaction."
+      - name: newBalanceOriginSet
+        description: "The new balance of the originating account after the transaction."
+      - name: oldBalanceOrigin
+        description: "The old balance of the originating account before the transaction."
+      - name: timestamp
+        description: "Timestamp when the transaction occurred."
+      - name: amount
+        description: "The amount involved in the transaction."
+
+  - name: fraud_transaction_ofAll
+    description: "Selects transactions with their payment IDs, fraud status, payment datetime, and amount."
+    columns:
+      - name: payment_id
+        description: "Unique identifier for the payment."
+        tests:
+          - not_null
+      - name: isFraud
+        description: "Indicates whether the transaction is fraudulent."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+      - name: payment_datetime
+        description: "Datetime when the payment was made."
+      - name: amount
+        description: "Amount involved in the transaction."
+      - name: isFlaggedFraud
+        description: "Indicates whether the transaction was flagged as fraudulent."
+
+  - name: fill_transactionValid
+    description: "This model processes transactions to fill in valid transaction information based on various conditions."
+    columns:
+      - name: isValid
+        description: "Indicates whether the transaction is valid based on specific conditions."
+        tests:
+          - accepted_values:
+              values: ['True', 'False']
+      - name: newbalanceOrig_valid
+        description: "Validated new balance of the originating account."
+      - name: newbalanceDest_valid
+        description: "Validated new balance of the destination account."
+
+  - name: perpet_received_fraud
+    description: "Identifies unique fraudulent transactions received by perpetrators."
+    columns:
+      - name: payment_id
+        description: "Unique identifier for the payment."
+        tests:
+          - not_null
+      - name: nameDest
+        description: "Destination account involved in the transaction."
+      - name: payment_datetime
+        description: "Datetime when the payment was made."
+      - name: isFraud
+        description: "Indicates whether the transaction is fraudulent."
+
+  - name: perpet_received_nonfraud
+    description: "Identifies non-fraudulent transactions received by accounts previously involved in fraud."
+    columns:
+      - name: nameOrig
+        description: "Originating account of the transaction."
+        tests:
+          - not_null
+      - name: nameDest
+        description: "Destination account of the transaction, previously involved in fraudulent activity."
+        tests:
+          - not_null
+      - name: payment_datetime
+        description: "Datetime when the payment was made."
+      - name: payment_id
+        description: "Unique identifier for the payment."
+      - name: NonFraudulentTransactionCount
+        description: "Count of non-fraudulent transactions associated with the account."
+
+  - name: perpet_send_nonfraud
+    description: "Identifies non-fraudulent transactions sent by accounts previously involved in fraud."
+    columns:
+      - name: payment_id
+        description: "Unique identifier for the payment."
+        tests:
+          - not_null
+      - name: payment_datetime
+        description: "Datetime when the payment was made."
+      - name: nameOrig
+        description: "Originating account of the transaction, previously involved in fraudulent activity."
+        tests:
+          - not_null
+      - name: nameDest
+        description: "Destination account of the transaction."
+        tests:
+          - not_null
+
+  - name: trx_victim_after_fraud
+    description: "Tracks transactions made by victims after their first fraudulent transaction."
+    columns:
+      - name: nameOrig
+        description: "Originating account of the transaction."
+        tests:
+          - not_null
+      - name: payment_datetime
+        description: "Datetime when the payment was made."
+        tests:
+          - not_null
+      - name: isFraud
+        description: "Flag indicating whether the transaction is fraudulent."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+
+  - name: trx_victim_before_fraud
+    description: "Tracks transactions made by victims before their first fraudulent transaction."
+    columns:
+      - name: nameOrig
+        description: "Originating account of the transaction."
+        tests:
+          - not_null
+      - name: payment_datetime
+        description: "Datetime when the payment was made."
+        tests:
+          - not_null
+      - name: isFraud
+        description: "Flag indicating whether the transaction is fraudulent."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+
+
+  - name: customer_status
+    description: "Consolidates customer status into categories based on their involvement in fraudulent and suspect activities."
+    columns:
+      - name: CustomerID
+        description: "Unique identifier of the customer."
+        tests:
+          - not_null
+      - name: isFraudAccount
+        description: "Indicates if the customer is involved in fraudulent activities."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+      - name: isSuspectAccount
+        description: "Indicates if the customer is involved in suspect activities."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+      - name: CustomerStatus
+        description: "Categorizes customers based on their involvement in fraud and suspect activities."
+        tests:
+          - accepted_values:
+              values: ['Fraudsters', 'FraudSuspects', 'NotAffiliated']
+
+  - name: victim_status_after_fraud
+    description: "Customer victim status after in a fraudulent transaction, related to churn rate of customer"
+    columns:
+      - name: nameOrig
+        description: "Originating account of the transaction."
+        tests:
+          - not_null
+      - name: AccountActivityStatus
+        description: "Indicates if the customer is make transaction after being victim of fraud or not"
+        tests:
+          - accepted_values:
+              values: ['Repeat Transaction', 'Inactive Post-Fraud']
