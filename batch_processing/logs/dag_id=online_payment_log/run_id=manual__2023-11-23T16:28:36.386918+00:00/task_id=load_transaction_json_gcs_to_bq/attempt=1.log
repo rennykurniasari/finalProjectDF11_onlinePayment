@@ -1,0 +1,28 @@
+[2023-11-23T16:28:43.482+0000] {taskinstance.py:1159} INFO - Dependencies all met for dep_context=non-requeueable deps ti=<TaskInstance: online_payment_log.load_transaction_json_gcs_to_bq manual__2023-11-23T16:28:36.386918+00:00 [queued]>
+[2023-11-23T16:28:43.493+0000] {taskinstance.py:1159} INFO - Dependencies all met for dep_context=requeueable deps ti=<TaskInstance: online_payment_log.load_transaction_json_gcs_to_bq manual__2023-11-23T16:28:36.386918+00:00 [queued]>
+[2023-11-23T16:28:43.494+0000] {taskinstance.py:1361} INFO - Starting attempt 1 of 1
+[2023-11-23T16:28:43.516+0000] {taskinstance.py:1382} INFO - Executing <Task(GCSToBigQueryOperator): load_transaction_json_gcs_to_bq> on 2023-11-23 16:28:36.386918+00:00
+[2023-11-23T16:28:43.525+0000] {standard_task_runner.py:57} INFO - Started process 600 to run task
+[2023-11-23T16:28:43.530+0000] {standard_task_runner.py:84} INFO - Running: ['***', 'tasks', 'run', 'online_payment_log', 'load_transaction_json_gcs_to_bq', 'manual__2023-11-23T16:28:36.386918+00:00', '--job-id', '5', '--raw', '--subdir', 'DAGS_FOLDER/online_payment_log_Oct2023.py', '--cfg-path', '/tmp/tmp3s1f_vj2']
+[2023-11-23T16:28:43.531+0000] {standard_task_runner.py:85} INFO - Job 5: Subtask load_transaction_json_gcs_to_bq
+[2023-11-23T16:28:43.606+0000] {task_command.py:416} INFO - Running <TaskInstance: online_payment_log.load_transaction_json_gcs_to_bq manual__2023-11-23T16:28:36.386918+00:00 [running]> on host edb4b3a2a207
+[2023-11-23T16:28:43.847+0000] {taskinstance.py:1662} INFO - Exporting env vars: AIRFLOW_CTX_DAG_OWNER='***' AIRFLOW_CTX_DAG_ID='online_payment_log' AIRFLOW_CTX_TASK_ID='load_transaction_json_gcs_to_bq' AIRFLOW_CTX_EXECUTION_DATE='2023-11-23T16:28:36.386918+00:00' AIRFLOW_CTX_TRY_NUMBER='1' AIRFLOW_CTX_DAG_RUN_ID='manual__2023-11-23T16:28:36.386918+00:00'
+[2023-11-23T16:28:43.874+0000] {connection.py:232} WARNING - Connection schemes (type: google_cloud_platform) shall not contain '_' according to RFC3986.
+[2023-11-23T16:28:43.887+0000] {base.py:73} INFO - Using connection ID 'google_cloud_default' for task execution.
+[2023-11-23T16:28:43.889+0000] {gcs_to_bigquery.py:376} INFO - Using existing BigQuery table for storing data...
+[2023-11-23T16:28:44.090+0000] {bigquery.py:2312} INFO - Project is not included in destination_project_dataset_table: online_payment_log_Oct2023.transaction; using project "brave-sonar-400508"
+[2023-11-23T16:28:44.091+0000] {gcs_to_bigquery.py:380} INFO - Executing: {'load': {'autodetect': True, 'createDisposition': 'CREATE_IF_NEEDED', 'destinationTable': {'projectId': 'brave-sonar-400508', 'datasetId': 'online_payment_log_Oct2023', 'tableId': 'transaction'}, 'sourceFormat': 'NEWLINE_DELIMITED_JSON', 'sourceUris': ['gs://df-11-group-1/transaction_1/*.json'], 'writeDisposition': 'WRITE_TRUNCATE', 'ignoreUnknownValues': False}}
+[2023-11-23T16:28:44.092+0000] {bigquery.py:1596} INFO - Inserting job ***_online_payment_log_load_transaction_json_gcs_to_bq_2023_11_23T16_28_36_386918_00_00_5774a51b2e9b31807a9bd93e3eac4ece
+[2023-11-23T17:19:24.573+0000] {taskinstance.py:1937} ERROR - Task failed with exception
+Traceback (most recent call last):
+  File "/home/airflow/.local/lib/python3.8/site-packages/airflow/providers/google/cloud/transfers/gcs_to_bigquery.py", line 439, in execute
+    job.result(timeout=self.result_timeout, retry=self.result_retry)
+  File "/home/airflow/.local/lib/python3.8/site-packages/google/cloud/bigquery/job/base.py", line 922, in result
+    return super(_AsyncJob, self).result(timeout=timeout, **kwargs)
+  File "/home/airflow/.local/lib/python3.8/site-packages/google/api_core/future/polling.py", line 261, in result
+    raise self._exception
+google.api_core.exceptions.BadRequest: 400 Resources exceeded during query execution: Deadline exceeded while globbing file pattern. Please make sure all files matching the URI gs://df-11-group-1/transaction_1/*.json are within the limit of https://cloud.google.com/bigquery/quotas#load_jobs and https://cloud.google.com/bigquery/quotas#external_tables.
+[2023-11-23T17:19:24.597+0000] {taskinstance.py:1400} INFO - Marking task as FAILED. dag_id=online_payment_log, task_id=load_transaction_json_gcs_to_bq, execution_date=20231123T162836, start_date=20231123T162843, end_date=20231123T171924
+[2023-11-23T17:19:24.646+0000] {standard_task_runner.py:104} ERROR - Failed to execute job 5 for task load_transaction_json_gcs_to_bq (400 Resources exceeded during query execution: Deadline exceeded while globbing file pattern. Please make sure all files matching the URI gs://df-11-group-1/transaction_1/*.json are within the limit of https://cloud.google.com/bigquery/quotas#load_jobs and https://cloud.google.com/bigquery/quotas#external_tables.; 600)
+[2023-11-23T17:19:24.717+0000] {local_task_job_runner.py:228} INFO - Task exited with return code 1
+[2023-11-23T17:19:24.773+0000] {taskinstance.py:2778} INFO - 0 downstream tasks scheduled from follow-on schedule check

@@ -1,3 +1,18 @@
 service-account.json
 kafka-env/
 Fraud Transaction Dataset/
+terraform2/
+stream_processing/keys/
+batch_processing/keys/
+
+stream_processing/infrastructure/terraform.tfstate
+stream_processing/infrastructure/terraform.tfstate.backup
+stream_processing/infrastructure/.terraform.lock.hcl
+stream_processing/infrastructure/.terraform/
+
+batch_processing/infrastructure/terraform.tfstate
+batch_processing/infrastructure/terraform.tfstate.backup
+batch_processing/infrastructure/.terraform.lock.hcl
+batch_processing/infrastructure/.terraform/
+batch_processing/dags/__pycache__
+batch_processing/logs/
