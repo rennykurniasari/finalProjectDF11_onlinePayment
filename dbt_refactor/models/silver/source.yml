@@ -1,0 +1,11 @@
+version : 2
+
+sources:
+  - name: final_project_bronze
+    database: brave-sonar-400508
+    schema: final_project_df11_group_1_bronze
+    tables:
+      - name: fraud_transaction
+        identifier: bronze_fraudTransaction
+      - name: not_fraud_transaction
+        identifier: bronze_notFraudTransaction

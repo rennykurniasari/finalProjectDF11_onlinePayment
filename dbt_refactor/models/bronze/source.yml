@@ -1,0 +1,11 @@
+version : 2
+
+sources:
+  - name: final_project
+    database: brave-sonar-400508
+    schema: final_project_df11_group_1
+    tables:
+      - name: transaction
+        identifier: test_transaction
+      - name: fraud
+        identifier: fraud

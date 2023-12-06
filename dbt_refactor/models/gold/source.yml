@@ -1,0 +1,11 @@
+version : 2
+
+sources:
+  - name: final_project_silver
+    database: brave-sonar-400508
+    schema: final_project_df11_group_1_silver
+    tables:
+      - name: fraudster
+        identifier: silver_fraudster
+      - name: fraudVictim
+        identifier: silver_fraudVictim

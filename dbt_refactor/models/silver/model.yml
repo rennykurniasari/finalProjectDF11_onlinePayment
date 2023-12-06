@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: silver_allTransaction
+  - name: silver_fraudTransaction
+  - name: silver_fraudster
+  - name: silver_fraudVictim
+  - name: silver_perpet_received_nonfraud
+  - name: silver_perpet_send_nonfraud
+  - name: silver_customer
