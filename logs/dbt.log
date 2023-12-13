@@ -1,0 +1,2503 @@
+[0m17:53:07.223900 [info ] [Thread-3 (]: 6 of 8 OK created sql table model online_payment_transformed.svr_fraudster_send_nonfraud_trx  [[32mCREATE TABLE (18.0 rows, 248.6 MiB processed)[0m in 12.99s]
+[0m17:53:07.227826 [debug] [Thread-3 (]: Finished running node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:53:09.749205 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_fraudster_receive_nonfraud_trx (execute): 17:52:54.273346 => 17:53:09.748734
+[0m17:53:09.750742 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '7867c978-808c-429d-90cb-bca17e875173', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x122818290>]}
+[0m17:53:09.751816 [info ] [Thread-1 (]: 5 of 8 OK created sql table model online_payment_transformed.svr_fraudster_receive_nonfraud_trx  [[32mCREATE TABLE (57.4k rows, 172.8 MiB processed)[0m in 15.52s]
+[0m17:53:09.752906 [debug] [Thread-1 (]: Finished running node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:53:09.754204 [debug] [Thread-2 (]: Began running node model.online_payment.svr_customer_detail
+[0m17:53:09.755264 [info ] [Thread-2 (]: 7 of 8 START sql table model online_payment_transformed.svr_customer_detail .... [RUN]
+[0m17:53:09.756482 [debug] [Thread-2 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_fraud_detail, now model.online_payment.svr_customer_detail)
+[0m17:53:09.757097 [debug] [Thread-2 (]: Began compiling node model.online_payment.svr_customer_detail
+[0m17:53:09.763704 [debug] [Thread-2 (]: Writing injected SQL for node "model.online_payment.svr_customer_detail"
+[0m17:53:09.769952 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_customer_detail (compile): 17:53:09.757474 => 17:53:09.769508
+[0m17:53:09.770586 [debug] [Thread-2 (]: Began executing node model.online_payment.svr_customer_detail
+[0m17:53:09.773841 [debug] [Thread-2 (]: Opening a new connection, currently in state closed
+[0m17:53:10.403889 [debug] [Thread-2 (]: Writing runtime sql for node "model.online_payment.svr_customer_detail"
+[0m17:53:10.407747 [debug] [Thread-2 (]: On model.online_payment.svr_customer_detail: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_customer_detail"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_customer_detail`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+od_customer_trx AS (
+    SELECT
+        d.nameDest as nameDest_d,
+        o.nameOrig as nameOrig_o,
+    FROM source d
+    LEFT JOIN source o ON d.nameDest = o.nameOrig
+    WHERE d.transactionID <> o.transactionID
+),
+
+od_customer AS (
+    SELECT
+        DISTINCT nameOrig_o as nameDest,
+        CASE WHEN nameOrig_o = nameDest_d THEN True ELSE False END AS isOrig,
+        CASE WHEN nameOrig_o = nameDest_d THEN True ELSE False END AS isDest
+    FROM od_customer_trx
+),
+
+o_customer AS (
+    SELECT
+        DISTINCT nameOrig,
+        CASE WHEN nameOrig IS NOT NULL THEN True ELSE False END AS isOrig,
+        CASE WHEN nameOrig IS NOT NULL THEN False ELSE True END AS isDest
+    FROM source
+    EXCEPT DISTINCT
+    SELECT
+        nameDest, isOrig, isDest
+    FROM od_customer
+),
+
+d_customer AS (
+    SELECT
+        DISTINCT nameDest,
+        CASE WHEN nameDest IS NOT NULL THEN False ELSE True END AS isOrig,
+        CASE WHEN nameDest IS NOT NULL THEN True ELSE False END AS isDest
+    FROM source
+    EXCEPT DISTINCT
+    SELECT
+        nameDest, isOrig, isDest
+    FROM od_customer
+),
+
+merge_customer AS (
+    SELECT * FROM od_customer
+    UNION ALL
+    SELECT * FROM o_customer
+    UNION ALL
+    SELECT * FROM d_customer
+),
+
+unique_customers AS (
+    SELECT
+        nameDest as customerID,
+        isOrig,
+        isDest
+    FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (PARTITION BY nameDest ORDER BY isOrig DESC) AS row_num
+        FROM merge_customer
+    )
+    WHERE row_num = 1
+),
+
+customer_rfm AS (
+  SELECT
+    nameOrig,
+    DATE_DIFF(DATE(CURRENT_DATETIME()), DATE(MAX(transactionDatetime)), DAY) AS recencyDays,
+    COUNT(*) AS frequency,
+    ROUND(SUM(amount), 2) AS monetaryValue
+  FROM source
+  GROUP BY nameOrig
+),
+
+fraudulent_activity AS (
+    SELECT
+        DISTINCT nameDest AS customerID
+    FROM source
+    WHERE isFraud = True
+),
+
+suspect_activity AS (
+    SELECT
+        DISTINCT nameOrig AS customerID
+    FROM source
+    WHERE nameDest IN (SELECT customerID FROM `final-project-404104`.`online_payment_transformed`.`svr_fraudster_receive_nonfraud_trx`) AND isFraud = False
+    UNION DISTINCT
+    SELECT
+        DISTINCT customerID
+    FROM `final-project-404104`.`online_payment_transformed`.`svr_fraudster_send_nonfraud_trx`
+),
+
+victim_activity AS (
+    SELECT
+        DISTINCT nameOrig AS customerID
+    FROM source
+    WHERE isFraud = True
+),
+
+customer_detail AS (
+    SELECT
+        uc.customerID,
+        uc.isOrig,
+        uc.isDest,
+        CASE 
+            WHEN uc.isOrig = True AND uc.isDest=False THEN 'Sender'
+            WHEN uc.isOrig = False AND uc.isDest=True THEN 'Receiver'
+            WHEN uc.isOrig = True AND uc.isDest = True THEN 'Transactor'
+        END AS customerCategory,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.recencyDays
+            ELSE DATE_DIFF(DATE(CURRENT_DATETIME()), DATE('2022-12-31'), DAY)
+        END AS recencyDays,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.frequency
+            ELSE 0
+        END AS frequency,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.monetaryValue
+            ELSE 0
+        END AS monetaryValue,
+        CASE
+            WHEN fa.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isFraudAccount,
+        CASE
+            WHEN sa.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isSuspectAccount,
+        CASE
+            WHEN va.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isVictimAccount
+    FROM unique_customers uc
+    LEFT JOIN customer_rfm cr ON uc.customerID = cr.nameOrig
+    LEFT JOIN fraudulent_activity fa ON uc.customerID = fa.customerID
+    LEFT JOIN suspect_activity sa ON uc.customerID = sa.customerID
+    LEFT JOIN victim_activity va ON uc.customerID = va.customerID
+    GROUP BY uc.customerID, uc.isOrig, uc.isDest, cr.recencyDays, cr.frequency, cr.monetaryValue, fa.CustomerID, sa.CustomerID, va.CustomerID
+)
+
+SELECT *,
+    CASE 
+        WHEN (isFraudAccount = True AND isSuspectAccount=False) OR (isFraudAccount = True AND isSuspectAccount=True) THEN 'Fraudster'
+        WHEN isFraudAccount = False AND isSuspectAccount=True THEN 'Fraud Suspect'
+        WHEN isVictimAccount = True THEN 'Victim'
+        WHEN isFraudAccount = False AND isSuspectAccount = False THEN 'Not Affiliated'
+    END AS customerStatus 
+FROM customer_detail
+    );
+  
+[0m17:53:11.167856 [debug] [Thread-2 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:3b8e049a-d91f-437c-8a12-6410dc4ad9db&page=queryresults
+[0m17:53:35.623198 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_customer_detail (execute): 17:53:09.770945 => 17:53:35.622568
+[0m17:53:35.625329 [debug] [Thread-2 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '7867c978-808c-429d-90cb-bca17e875173', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x122a6f4d0>]}
+[0m17:53:35.626578 [info ] [Thread-2 (]: 7 of 8 OK created sql table model online_payment_transformed.svr_customer_detail  [[32mCREATE TABLE (9.1m rows, 297.8 MiB processed)[0m in 25.87s]
+[0m17:53:35.628051 [debug] [Thread-2 (]: Finished running node model.online_payment.svr_customer_detail
+[0m17:53:35.629407 [debug] [Thread-1 (]: Began running node model.online_payment.fraudster_status
+[0m17:53:35.630391 [info ] [Thread-1 (]: 8 of 8 START sql table model online_payment_marts.fraudster_status ............. [RUN]
+[0m17:53:35.631847 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_fraudster_receive_nonfraud_trx, now model.online_payment.fraudster_status)
+[0m17:53:35.632567 [debug] [Thread-1 (]: Began compiling node model.online_payment.fraudster_status
+[0m17:53:35.637854 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.fraudster_status"
+[0m17:53:35.640930 [debug] [Thread-1 (]: Timing info for model.online_payment.fraudster_status (compile): 17:53:35.632990 => 17:53:35.640493
+[0m17:53:35.641931 [debug] [Thread-1 (]: Began executing node model.online_payment.fraudster_status
+[0m17:53:35.646423 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m17:53:36.261191 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.fraudster_status"
+[0m17:53:36.265049 [debug] [Thread-1 (]: On model.online_payment.fraudster_status: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.fraudster_status"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_marts`.`fraudster_status`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+fraud_detail AS (
+    SELECT * FROM `final-project-404104`.`online_payment_transformed`.`svr_fraud_detail`
+),
+
+frequent_fraudsters AS (
+    SELECT DISTINCT
+        nameDest AS customerID,
+        occurs AS fraudOccurs
+    FROM (
+        SELECT
+            *,
+            COUNT(transactionID) OVER (PARTITION BY nameDest) AS occurs
+        FROM source
+        WHERE isFraud = True
+    ) AS t
+    WHERE occurs > 1
+),
+
+fraudulent_transactions AS (
+    SELECT DISTINCT
+        nameDest
+    FROM fraud_detail
+),
+
+customer_detail AS (
+    SELECT
+        DISTINCT customerID,
+        recencyDays,
+        frequency,
+        monetaryValue
+    FROM `final-project-404104`.`online_payment_transformed`.`svr_customer_detail`
+)
+
+SELECT 
+    ft.nameDest AS customerID,
+    CASE 
+        WHEN ft.nameDest IN (SELECT customerID FROM frequent_fraudsters) THEN 'Frequent Fraudster'
+        ELSE 'Infrequent Fraudster'
+    END AS fraudsterCategory,
+    cd.customerCategory,
+    cd.recencyDays,
+    cd.frequency,
+    cd.monetaryValue
+FROM fraudulent_transactions ft
+LEFT JOIN customer_detail cd ON ft.nameDest = cd.customerID
+    );
+  
+[0m17:53:36.946169 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:f0160013-2fea-4efb-98ea-3d952b3122a8&page=queryresults
+[0m17:53:37.547120 [debug] [Thread-1 (]: BigQuery adapter: Retry attempt 1 of 1 after error: BadRequest('Name customerCategory not found inside cd at [56:8]')
+[0m17:53:38.571612 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:76f38acb-d072-4531-8b30-bb433c7883c3&page=queryresults
+[0m17:53:39.191019 [error] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:76f38acb-d072-4531-8b30-bb433c7883c3&page=queryresults
+[0m17:53:39.193059 [debug] [Thread-1 (]: Timing info for model.online_payment.fraudster_status (execute): 17:53:35.642567 => 17:53:39.192372
+[0m17:53:39.232707 [debug] [Thread-1 (]: Database Error in model fraudster_status (models/gold/fraudster_status.sql)
+  Name customerCategory not found inside cd at [56:8]
+  compiled Code at target/run/online_payment/models/gold/fraudster_status.sql
+[0m17:53:39.234448 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '7867c978-808c-429d-90cb-bca17e875173', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1229d1950>]}
+[0m17:53:39.235771 [error] [Thread-1 (]: 8 of 8 ERROR creating sql table model online_payment_marts.fraudster_status .... [[31mERROR[0m in 3.60s]
+[0m17:53:39.237038 [debug] [Thread-1 (]: Finished running node model.online_payment.fraudster_status
+[0m17:53:39.240104 [debug] [MainThread]: Connection 'master' was properly closed.
+[0m17:53:39.240719 [debug] [MainThread]: Connection 'model.online_payment.fraudster_status' was properly closed.
+[0m17:53:39.241162 [debug] [MainThread]: Connection 'model.online_payment.svr_customer_detail' was properly closed.
+[0m17:53:39.241585 [debug] [MainThread]: Connection 'model.online_payment.svr_fraudster_send_nonfraud_trx' was properly closed.
+[0m17:53:39.242156 [info ] [MainThread]: 
+[0m17:53:39.242974 [info ] [MainThread]: Finished running 3 view models, 5 table models in 0 hours 0 minutes and 50.09 seconds (50.09s).
+[0m17:53:39.245369 [debug] [MainThread]: Command end result
+[0m17:53:39.281141 [info ] [MainThread]: 
+[0m17:53:39.281908 [info ] [MainThread]: [31mCompleted with 1 error and 0 warnings:[0m
+[0m17:53:39.282547 [info ] [MainThread]: 
+[0m17:53:39.283126 [error] [MainThread]:   Database Error in model fraudster_status (models/gold/fraudster_status.sql)
+  Name customerCategory not found inside cd at [56:8]
+  compiled Code at target/run/online_payment/models/gold/fraudster_status.sql
+[0m17:53:39.283680 [info ] [MainThread]: 
+[0m17:53:39.284246 [info ] [MainThread]: Done. PASS=7 WARN=0 ERROR=1 SKIP=0 TOTAL=8
+[0m17:53:39.287431 [debug] [MainThread]: Resource report: {"command_name": "run", "command_wall_clock_time": 52.5144, "process_user_time": 7.085601, "process_kernel_time": 1.276904, "process_mem_max_rss": "195383296", "command_success": false, "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m17:53:39.288463 [debug] [MainThread]: Command `dbt run` failed at 17:53:39.288261 after 52.52 seconds
+[0m17:53:39.289179 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11443ec50>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1144242d0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x114425910>]}
+[0m17:53:39.289821 [debug] [MainThread]: Flushing usage events
+[0m17:54:32.398799 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x110560450>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1105364d0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1105347d0>]}
+
+
+============================== 17:54:32.409563 | 8fddeef4-8a68-43e3-8439-201e91c30644 ==============================
+[0m17:54:32.409563 [info ] [MainThread]: Running with dbt=1.7.2
+[0m17:54:32.410655 [debug] [MainThread]: running dbt with arguments {'printer_width': '80', 'indirect_selection': 'eager', 'log_cache_events': 'False', 'write_json': 'True', 'partial_parse': 'True', 'cache_selected_only': 'False', 'profiles_dir': '/Users/rennykurniasari/.dbt', 'fail_fast': 'False', 'debug': 'False', 'log_path': '/Users/rennykurniasari/Desktop/DF11/final_project/dbt/online_payment/logs', 'warn_error': 'None', 'version_check': 'True', 'use_colors': 'True', 'use_experimental_parser': 'False', 'no_print': 'None', 'quiet': 'False', 'log_format': 'default', 'introspect': 'True', 'warn_error_options': 'WarnErrorOptions(include=[], exclude=[])', 'static_parser': 'True', 'target_path': 'None', 'invocation_command': 'dbt run --select +fraudster_status', 'send_anonymous_usage_stats': 'True'}
+[0m17:54:34.224183 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'project_id', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11de5d150>]}
+[0m17:54:34.401600 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'adapter_info', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1101af5d0>]}
+[0m17:54:34.404286 [info ] [MainThread]: Registered adapter: bigquery=1.6.7
+[0m17:54:34.435075 [debug] [MainThread]: checksum: 61e99fc04fd80d06ce91efefd25c0802dcce8a048167599a1a188233d6ce8ed9, vars: {}, profile: , target: , version: 1.7.2
+[0m17:54:34.570335 [debug] [MainThread]: Partial parsing enabled: 0 files deleted, 0 files added, 0 files changed.
+[0m17:54:34.570999 [debug] [MainThread]: Partial parsing enabled, no changes found, skipping parsing
+[0m17:54:34.582057 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'load_project', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e40fc10>]}
+[0m17:54:34.608777 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'resource_counts', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e323dd0>]}
+[0m17:54:34.610009 [info ] [MainThread]: Found 20 models, 9 sources, 0 exposures, 0 metrics, 444 macros, 0 groups, 0 semantic models
+[0m17:54:34.611922 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e27c350>]}
+[0m17:54:34.615850 [info ] [MainThread]: 
+[0m17:54:34.617282 [debug] [MainThread]: Acquiring new bigquery connection 'master'
+[0m17:54:34.621284 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m17:54:34.622636 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m17:54:34.627098 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m17:54:34.623289 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m17:54:34.624646 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m17:54:34.631012 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m17:54:35.638153 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_transformed)
+[0m17:54:35.640355 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_raw)
+[0m17:54:35.641563 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m17:54:35.643366 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_marts)
+[0m17:54:35.644895 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m17:54:35.646490 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m17:54:36.312338 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e27da90>]}
+[0m17:54:36.314115 [info ] [MainThread]: Concurrency: 3 threads (target='dev')
+[0m17:54:36.314879 [info ] [MainThread]: 
+[0m17:54:36.320693 [debug] [Thread-1 (]: Began running node model.online_payment.brz_fraud_confirmation
+[0m17:54:36.321434 [debug] [Thread-2 (]: Began running node model.online_payment.brz_transactions_merge
+[0m17:54:36.322281 [info ] [Thread-1 (]: 1 of 8 START sql view model online_payment_raw.brz_fraud_confirmation .......... [RUN]
+[0m17:54:36.323152 [info ] [Thread-2 (]: 2 of 8 START sql view model online_payment_raw.brz_transactions_merge .......... [RUN]
+[0m17:54:36.324994 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_transformed, now model.online_payment.brz_fraud_confirmation)
+[0m17:54:36.327010 [debug] [Thread-2 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_raw, now model.online_payment.brz_transactions_merge)
+[0m17:54:36.328014 [debug] [Thread-1 (]: Began compiling node model.online_payment.brz_fraud_confirmation
+[0m17:54:36.328823 [debug] [Thread-2 (]: Began compiling node model.online_payment.brz_transactions_merge
+[0m17:54:36.364107 [debug] [Thread-2 (]: Writing injected SQL for node "model.online_payment.brz_transactions_merge"
+[0m17:54:36.365761 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.brz_fraud_confirmation"
+[0m17:54:36.367000 [debug] [Thread-2 (]: Timing info for model.online_payment.brz_transactions_merge (compile): 17:54:36.359055 => 17:54:36.366624
+[0m17:54:36.367837 [debug] [Thread-2 (]: Began executing node model.online_payment.brz_transactions_merge
+[0m17:54:36.368470 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_fraud_confirmation (compile): 17:54:36.340477 => 17:54:36.368165
+[0m17:54:36.399588 [debug] [Thread-1 (]: Began executing node model.online_payment.brz_fraud_confirmation
+[0m17:54:36.434337 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.brz_fraud_confirmation"
+[0m17:54:36.453464 [debug] [Thread-2 (]: Writing runtime sql for node "model.online_payment.brz_transactions_merge"
+[0m17:54:36.454465 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m17:54:36.455268 [debug] [Thread-2 (]: Opening a new connection, currently in state closed
+[0m17:54:36.517353 [debug] [Thread-2 (]: On model.online_payment.brz_transactions_merge: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions_merge"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+  OPTIONS()
+  as SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_1`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_2`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_3`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_4`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_5`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_6`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_7`
+ORDER BY step;
+
+
+[0m17:54:36.518175 [debug] [Thread-1 (]: On model.online_payment.brz_fraud_confirmation: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_fraud_confirmation"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_fraud_confirmation`
+  OPTIONS()
+  as WITH source AS (
+
+    SELECT * FROM `final-project-404104`.`online_payment`.`fraud_confirmation`
+
+)
+
+SELECT
+    idTransaction as transactionID,
+    timestamp as transactionDatetime,
+    type,
+    ROUND(amount, 2) as amount,
+    CAST(isFraud as BOOLEAN) as isFraud,
+    CAST(isFlaggedFraud as BOOLEAN) as isFlaggedFraud,
+    CAST(confirm as BOOLEAN) as isConfirmed,
+    CAST(isTrueFraud as BOOLEAN) as isTrueFraud,
+    nameOrigin as nameOrig,
+    ROUND(oldBalanceOrigin, 2) as oldBalanceOrig,
+    ROUND(newBalanceOrigin, 2) as newBalanceOrig,
+    nameDest,
+    ROUND(oldbalanceDest, 2) as oldBalanceDest,
+    ROUND(newbalanceDest, 2) as newBalanceDest,
+    CAST(refund as BOOLEAN) as isRefunded,
+    ROUND(oldBalanceOriginSet, 2) as oldBalanceOrigSet,
+    ROUND(newBalanceOriginSet, 2) as newBalanceOrigSet,
+    ROUND(oldBalanceDestSet, 2) as oldBalanceDestSet,
+    ROUND(newBalanceDestSet, 2) as newBalanceDestSet
+FROM
+    source
+ORDER BY transactionID;
+
+
+[0m17:54:37.263150 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:00522db7-2a48-4719-80c1-f8adf843c881&page=queryresults
+[0m17:54:37.264066 [debug] [Thread-2 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:eaa7da6f-bb0e-4646-9fa6-b32217dd189a&page=queryresults
+[0m17:54:37.907286 [debug] [Thread-2 (]: Timing info for model.online_payment.brz_transactions_merge (execute): 17:54:36.368829 => 17:54:37.906634
+[0m17:54:37.911646 [debug] [Thread-2 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e403b90>]}
+[0m17:54:37.913336 [info ] [Thread-2 (]: 2 of 8 OK created sql view model online_payment_raw.brz_transactions_merge ..... [[32mCREATE VIEW (0 processed)[0m in 1.59s]
+[0m17:54:37.915637 [debug] [Thread-2 (]: Finished running node model.online_payment.brz_transactions_merge
+[0m17:54:37.921386 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_fraud_confirmation (execute): 17:54:36.413712 => 17:54:37.921070
+[0m17:54:37.922549 [debug] [Thread-3 (]: Began running node model.online_payment.brz_transactions
+[0m17:54:37.923575 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e2a2f50>]}
+[0m17:54:37.924259 [info ] [Thread-3 (]: 3 of 8 START sql view model online_payment_raw.brz_transactions ................ [RUN]
+[0m17:54:37.926151 [info ] [Thread-1 (]: 1 of 8 OK created sql view model online_payment_raw.brz_fraud_confirmation ..... [[32mCREATE VIEW (0 processed)[0m in 1.60s]
+[0m17:54:37.927474 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_marts, now model.online_payment.brz_transactions)
+[0m17:54:37.928957 [debug] [Thread-1 (]: Finished running node model.online_payment.brz_fraud_confirmation
+[0m17:54:37.929916 [debug] [Thread-3 (]: Began compiling node model.online_payment.brz_transactions
+[0m17:54:37.931103 [debug] [Thread-2 (]: Began running node model.online_payment.svr_fraud_detail
+[0m17:54:37.935285 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.brz_transactions"
+[0m17:54:37.936016 [info ] [Thread-2 (]: 4 of 8 START sql table model online_payment_transformed.svr_fraud_detail ....... [RUN]
+[0m17:54:37.937191 [debug] [Thread-2 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions_merge, now model.online_payment.svr_fraud_detail)
+[0m17:54:37.937685 [debug] [Thread-2 (]: Began compiling node model.online_payment.svr_fraud_detail
+[0m17:54:37.941296 [debug] [Thread-2 (]: Writing injected SQL for node "model.online_payment.svr_fraud_detail"
+[0m17:54:37.943011 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (compile): 17:54:37.931518 => 17:54:37.942341
+[0m17:54:37.943732 [debug] [Thread-3 (]: Began executing node model.online_payment.brz_transactions
+[0m17:54:37.948467 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.brz_transactions"
+[0m17:54:37.949584 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_fraud_detail (compile): 17:54:37.938028 => 17:54:37.948912
+[0m17:54:37.950610 [debug] [Thread-2 (]: Began executing node model.online_payment.svr_fraud_detail
+[0m17:54:37.956757 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m17:54:37.969128 [debug] [Thread-2 (]: Opening a new connection, currently in state closed
+[0m17:54:38.029633 [debug] [Thread-3 (]: On model.online_payment.brz_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions`
+  OPTIONS()
+  as WITH NumberedRows AS (
+
+    SELECT
+        *,
+        ROW_NUMBER() OVER (ORDER BY payment_datetime) AS row_num
+    FROM `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+
+)
+
+SELECT
+    CONCAT('P', LPAD(CAST(row_num AS STRING), 10, '0'), '_', FORMAT_TIMESTAMP('%Y%m%d%H%M%S', payment_datetime)) AS transactionID,
+    payment_datetime as transactionDatetime,
+    type,
+    ROUND(amount, 2) as amount,
+    nameOrig,
+    ROUND(oldbalanceOrg, 2) as oldBalanceOrig,
+    ROUND(newbalanceOrig, 2) as newBalanceOrig,
+    nameDest,
+    ROUND(oldbalanceDest, 2) as oldBalanceDest,
+    ROUND(newbalanceDest, 2) as newBalanceDest,
+    CAST(isFraud as BOOLEAN) as isFraud,
+    CAST(isFlaggedFraud as BOOLEAN) as isFlaggedFraud,
+    step
+FROM
+    NumberedRows
+ORDER BY transactionID;
+
+
+[0m17:54:38.635713 [debug] [Thread-2 (]: Writing runtime sql for node "model.online_payment.svr_fraud_detail"
+[0m17:54:38.636776 [debug] [Thread-2 (]: On model.online_payment.svr_fraud_detail: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_fraud_detail"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_fraud_detail`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_fraud_confirmation`
+)
+
+SELECT
+    transactionID,
+    transactionDatetime,
+    type,
+    amount,
+    isFraud,
+    isFlaggedFraud,
+    isConfirmed,
+    isTrueFraud,
+    nameOrig,
+    oldBalanceOrig,
+    newBalanceOrig,
+    nameDest,
+    oldBalanceDest,
+    newBalanceDest
+FROM
+    source
+ORDER BY transactionID
+    );
+  
+[0m17:54:38.877357 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:7503074d-3621-4738-b694-3175d414a8df&page=queryresults
+[0m17:54:39.312180 [debug] [Thread-2 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:4c75c3f0-9f3d-479f-b79b-1d0c8da9717b&page=queryresults
+[0m17:54:39.499523 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (execute): 17:54:37.944246 => 17:54:39.498729
+[0m17:54:39.501258 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e2c3e10>]}
+[0m17:54:39.502785 [info ] [Thread-3 (]: 3 of 8 OK created sql view model online_payment_raw.brz_transactions ........... [[32mCREATE VIEW (0 processed)[0m in 1.57s]
+[0m17:54:39.504377 [debug] [Thread-3 (]: Finished running node model.online_payment.brz_transactions
+[0m17:54:39.505716 [debug] [Thread-1 (]: Began running node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:54:39.506535 [debug] [Thread-3 (]: Began running node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:54:39.507330 [info ] [Thread-1 (]: 5 of 8 START sql table model online_payment_transformed.svr_fraudster_receive_nonfraud_trx  [RUN]
+[0m17:54:39.508254 [info ] [Thread-3 (]: 6 of 8 START sql table model online_payment_transformed.svr_fraudster_send_nonfraud_trx  [RUN]
+[0m17:54:39.509678 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_fraud_confirmation, now model.online_payment.svr_fraudster_receive_nonfraud_trx)
+[0m17:54:39.511205 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions, now model.online_payment.svr_fraudster_send_nonfraud_trx)
+[0m17:54:39.511873 [debug] [Thread-1 (]: Began compiling node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:54:39.512468 [debug] [Thread-3 (]: Began compiling node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:54:39.516954 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.svr_fraudster_receive_nonfraud_trx"
+[0m17:54:39.521723 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.svr_fraudster_send_nonfraud_trx"
+[0m17:54:39.525978 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_fraudster_send_nonfraud_trx (compile): 17:54:39.517538 => 17:54:39.525288
+[0m17:54:39.526863 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_fraudster_receive_nonfraud_trx (compile): 17:54:39.512859 => 17:54:39.526467
+[0m17:54:39.527772 [debug] [Thread-3 (]: Began executing node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:54:39.528611 [debug] [Thread-1 (]: Began executing node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:54:39.532148 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m17:54:39.535653 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m17:54:40.142539 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.svr_fraudster_send_nonfraud_trx"
+[0m17:54:40.146667 [debug] [Thread-3 (]: On model.online_payment.svr_fraudster_send_nonfraud_trx: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_fraudster_send_nonfraud_trx"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_fraudster_send_nonfraud_trx`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+fraudulent_senders AS (
+    SELECT
+        DISTINCT nameDest
+    FROM source
+    WHERE isFraud = True
+)
+
+SELECT 
+    s.nameDest as customerID,
+    s.transactionID, 
+    s.transactionDatetime
+FROM 
+    source s
+JOIN 
+    fraudulent_senders fs ON s.nameOrig = fs.nameDest
+WHERE 
+    s.isFraud = False
+    );
+  
+[0m17:54:40.175066 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.svr_fraudster_receive_nonfraud_trx"
+[0m17:54:40.178073 [debug] [Thread-1 (]: On model.online_payment.svr_fraudster_receive_nonfraud_trx: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_fraudster_receive_nonfraud_trx"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_fraudster_receive_nonfraud_trx`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+fraudulent_transactions AS (
+    SELECT
+        DISTINCT nameDest
+    FROM source
+    WHERE isFraud = True
+)
+
+SELECT 
+    nft.nameDest as customerID,
+    nft.transactionID,
+    nft.transactionDatetime,
+    COUNT(*) AS nonFraudulentTransactionCount
+FROM 
+    source nft
+INNER JOIN 
+    fraudulent_transactions ft ON nft.nameDest = ft.nameDest
+WHERE 
+    nft.isFraud = False 
+GROUP BY 
+    nft.nameDest,
+    nft.transactionID,
+    nft.transactionDatetime
+ORDER BY
+    nft.transactionDatetime
+    );
+  
+[0m17:54:40.764611 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:55c1e982-aef3-4f04-a1a0-8960c2b9adc5&page=queryresults
+[0m17:54:40.813915 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:5cd26044-3979-4a9e-9f5e-e7b8d4f66b4f&page=queryresults
+[0m17:54:41.912099 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_fraud_detail (execute): 17:54:37.951107 => 17:54:41.910832
+[0m17:54:41.914370 [debug] [Thread-2 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e2b7090>]}
+[0m17:54:41.915513 [info ] [Thread-2 (]: 4 of 8 OK created sql table model online_payment_transformed.svr_fraud_detail .. [[32mCREATE TABLE (8.2k rows, 1.1 MiB processed)[0m in 3.98s]
+[0m17:54:41.916940 [debug] [Thread-2 (]: Finished running node model.online_payment.svr_fraud_detail
+[0m17:54:54.105497 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_fraudster_send_nonfraud_trx (execute): 17:54:39.529069 => 17:54:54.104865
+[0m17:54:54.107277 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e2b7690>]}
+[0m17:54:54.108401 [info ] [Thread-3 (]: 6 of 8 OK created sql table model online_payment_transformed.svr_fraudster_send_nonfraud_trx  [[32mCREATE TABLE (18.0 rows, 248.6 MiB processed)[0m in 14.60s]
+[0m17:54:54.109754 [debug] [Thread-3 (]: Finished running node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:54:55.477269 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_fraudster_receive_nonfraud_trx (execute): 17:54:39.532584 => 17:54:55.476649
+[0m17:54:55.479276 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e5e8810>]}
+[0m17:54:55.480484 [info ] [Thread-1 (]: 5 of 8 OK created sql table model online_payment_transformed.svr_fraudster_receive_nonfraud_trx  [[32mCREATE TABLE (57.4k rows, 172.8 MiB processed)[0m in 15.97s]
+[0m17:54:55.481856 [debug] [Thread-1 (]: Finished running node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:54:55.483365 [debug] [Thread-2 (]: Began running node model.online_payment.svr_customer_detail
+[0m17:54:55.484253 [info ] [Thread-2 (]: 7 of 8 START sql table model online_payment_transformed.svr_customer_detail .... [RUN]
+[0m17:54:55.485481 [debug] [Thread-2 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_fraud_detail, now model.online_payment.svr_customer_detail)
+[0m17:54:55.486142 [debug] [Thread-2 (]: Began compiling node model.online_payment.svr_customer_detail
+[0m17:54:55.491752 [debug] [Thread-2 (]: Writing injected SQL for node "model.online_payment.svr_customer_detail"
+[0m17:54:55.497178 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_customer_detail (compile): 17:54:55.486549 => 17:54:55.496273
+[0m17:54:55.498414 [debug] [Thread-2 (]: Began executing node model.online_payment.svr_customer_detail
+[0m17:54:55.504208 [debug] [Thread-2 (]: Opening a new connection, currently in state closed
+[0m17:54:56.130539 [debug] [Thread-2 (]: Writing runtime sql for node "model.online_payment.svr_customer_detail"
+[0m17:54:56.133113 [debug] [Thread-2 (]: On model.online_payment.svr_customer_detail: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_customer_detail"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_customer_detail`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+od_customer_trx AS (
+    SELECT
+        d.nameDest as nameDest_d,
+        o.nameOrig as nameOrig_o,
+    FROM source d
+    LEFT JOIN source o ON d.nameDest = o.nameOrig
+    WHERE d.transactionID <> o.transactionID
+),
+
+od_customer AS (
+    SELECT
+        DISTINCT nameOrig_o as nameDest,
+        CASE WHEN nameOrig_o = nameDest_d THEN True ELSE False END AS isOrig,
+        CASE WHEN nameOrig_o = nameDest_d THEN True ELSE False END AS isDest
+    FROM od_customer_trx
+),
+
+o_customer AS (
+    SELECT
+        DISTINCT nameOrig,
+        CASE WHEN nameOrig IS NOT NULL THEN True ELSE False END AS isOrig,
+        CASE WHEN nameOrig IS NOT NULL THEN False ELSE True END AS isDest
+    FROM source
+    EXCEPT DISTINCT
+    SELECT
+        nameDest, isOrig, isDest
+    FROM od_customer
+),
+
+d_customer AS (
+    SELECT
+        DISTINCT nameDest,
+        CASE WHEN nameDest IS NOT NULL THEN False ELSE True END AS isOrig,
+        CASE WHEN nameDest IS NOT NULL THEN True ELSE False END AS isDest
+    FROM source
+    EXCEPT DISTINCT
+    SELECT
+        nameDest, isOrig, isDest
+    FROM od_customer
+),
+
+merge_customer AS (
+    SELECT * FROM od_customer
+    UNION ALL
+    SELECT * FROM o_customer
+    UNION ALL
+    SELECT * FROM d_customer
+),
+
+unique_customers AS (
+    SELECT
+        nameDest as customerID,
+        isOrig,
+        isDest
+    FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (PARTITION BY nameDest ORDER BY isOrig DESC) AS row_num
+        FROM merge_customer
+    )
+    WHERE row_num = 1
+),
+
+customer_rfm AS (
+  SELECT
+    nameOrig,
+    DATE_DIFF(DATE(CURRENT_DATETIME()), DATE(MAX(transactionDatetime)), DAY) AS recencyDays,
+    COUNT(*) AS frequency,
+    ROUND(SUM(amount), 2) AS monetaryValue
+  FROM source
+  GROUP BY nameOrig
+),
+
+fraudulent_activity AS (
+    SELECT
+        DISTINCT nameDest AS customerID
+    FROM source
+    WHERE isFraud = True
+),
+
+suspect_activity AS (
+    SELECT
+        DISTINCT nameOrig AS customerID
+    FROM source
+    WHERE nameDest IN (SELECT customerID FROM `final-project-404104`.`online_payment_transformed`.`svr_fraudster_receive_nonfraud_trx`) AND isFraud = False
+    UNION DISTINCT
+    SELECT
+        DISTINCT customerID
+    FROM `final-project-404104`.`online_payment_transformed`.`svr_fraudster_send_nonfraud_trx`
+),
+
+victim_activity AS (
+    SELECT
+        DISTINCT nameOrig AS customerID
+    FROM source
+    WHERE isFraud = True
+),
+
+customer_detail AS (
+    SELECT
+        uc.customerID,
+        uc.isOrig,
+        uc.isDest,
+        CASE 
+            WHEN uc.isOrig = True AND uc.isDest=False THEN 'Sender'
+            WHEN uc.isOrig = False AND uc.isDest=True THEN 'Receiver'
+            WHEN uc.isOrig = True AND uc.isDest = True THEN 'Transactor'
+        END AS customerCategory,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.recencyDays
+            ELSE DATE_DIFF(DATE(CURRENT_DATETIME()), DATE('2022-12-31'), DAY)
+        END AS recencyDays,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.frequency
+            ELSE 0
+        END AS frequency,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.monetaryValue
+            ELSE 0
+        END AS monetaryValue,
+        CASE
+            WHEN fa.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isFraudAccount,
+        CASE
+            WHEN sa.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isSuspectAccount,
+        CASE
+            WHEN va.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isVictimAccount
+    FROM unique_customers uc
+    LEFT JOIN customer_rfm cr ON uc.customerID = cr.nameOrig
+    LEFT JOIN fraudulent_activity fa ON uc.customerID = fa.customerID
+    LEFT JOIN suspect_activity sa ON uc.customerID = sa.customerID
+    LEFT JOIN victim_activity va ON uc.customerID = va.customerID
+    GROUP BY uc.customerID, uc.isOrig, uc.isDest, cr.recencyDays, cr.frequency, cr.monetaryValue, fa.CustomerID, sa.CustomerID, va.CustomerID
+)
+
+SELECT *,
+    CASE 
+        WHEN (isFraudAccount = True AND isSuspectAccount=False) OR (isFraudAccount = True AND isSuspectAccount=True) THEN 'Fraudster'
+        WHEN isFraudAccount = False AND isSuspectAccount=True THEN 'Fraud Suspect'
+        WHEN isVictimAccount = True THEN 'Victim'
+        WHEN isFraudAccount = False AND isSuspectAccount = False THEN 'Not Affiliated'
+    END AS customerStatus 
+FROM customer_detail
+    );
+  
+[0m17:54:56.752605 [debug] [Thread-2 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:5ff1211c-9119-4413-8828-ff125d00a66f&page=queryresults
+[0m17:55:26.955975 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_customer_detail (execute): 17:54:55.499106 => 17:55:26.955314
+[0m17:55:26.958102 [debug] [Thread-2 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e615090>]}
+[0m17:55:26.959489 [info ] [Thread-2 (]: 7 of 8 OK created sql table model online_payment_transformed.svr_customer_detail  [[32mCREATE TABLE (9.1m rows, 297.8 MiB processed)[0m in 31.47s]
+[0m17:55:26.960783 [debug] [Thread-2 (]: Finished running node model.online_payment.svr_customer_detail
+[0m17:55:26.962264 [debug] [Thread-1 (]: Began running node model.online_payment.fraudster_status
+[0m17:55:26.963209 [info ] [Thread-1 (]: 8 of 8 START sql table model online_payment_marts.fraudster_status ............. [RUN]
+[0m17:55:26.964592 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_fraudster_receive_nonfraud_trx, now model.online_payment.fraudster_status)
+[0m17:55:26.965267 [debug] [Thread-1 (]: Began compiling node model.online_payment.fraudster_status
+[0m17:55:26.970279 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.fraudster_status"
+[0m17:55:26.971412 [debug] [Thread-1 (]: Timing info for model.online_payment.fraudster_status (compile): 17:55:26.965679 => 17:55:26.971065
+[0m17:55:26.971969 [debug] [Thread-1 (]: Began executing node model.online_payment.fraudster_status
+[0m17:55:26.975248 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m17:55:27.630360 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.fraudster_status"
+[0m17:55:27.632493 [debug] [Thread-1 (]: On model.online_payment.fraudster_status: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.fraudster_status"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_marts`.`fraudster_status`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+fraud_detail AS (
+    SELECT * FROM `final-project-404104`.`online_payment_transformed`.`svr_fraud_detail`
+),
+
+frequent_fraudsters AS (
+    SELECT DISTINCT
+        nameDest AS customerID,
+        occurs AS fraudOccurs
+    FROM (
+        SELECT
+            *,
+            COUNT(transactionID) OVER (PARTITION BY nameDest) AS occurs
+        FROM source
+        WHERE isFraud = True
+    ) AS t
+    WHERE occurs > 1
+),
+
+fraudulent_transactions AS (
+    SELECT DISTINCT
+        nameDest
+    FROM fraud_detail
+),
+
+customer_detail AS (
+    SELECT
+        DISTINCT customerID,
+        recencyDays,
+        frequency,
+        monetaryValue
+    FROM `final-project-404104`.`online_payment_transformed`.`svr_customer_detail`
+)
+
+SELECT 
+    ft.nameDest AS customerID,
+    CASE 
+        WHEN ft.nameDest IN (SELECT customerID FROM frequent_fraudsters) THEN 'Frequent Fraudster'
+        ELSE 'Infrequent Fraudster'
+    END AS fraudsterCategory,
+    cd.customerCategory,
+    cd.recencyDays,
+    cd.frequency,
+    cd.monetaryValue
+FROM fraudulent_transactions ft
+LEFT JOIN customer_detail cd ON ft.nameDest = cd.customerID
+    );
+  
+[0m17:55:28.313499 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:d04d80db-743a-42a3-9a2b-d90e1c2c5919&page=queryresults
+[0m17:55:28.931994 [debug] [Thread-1 (]: BigQuery adapter: Retry attempt 1 of 1 after error: BadRequest('Name customerCategory not found inside cd at [56:8]')
+[0m17:55:29.639197 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:fc4585b4-8fc2-49d1-b621-6ce4e756439d&page=queryresults
+[0m17:55:30.262299 [error] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:fc4585b4-8fc2-49d1-b621-6ce4e756439d&page=queryresults
+[0m17:55:30.264395 [debug] [Thread-1 (]: Timing info for model.online_payment.fraudster_status (execute): 17:55:26.972319 => 17:55:30.263716
+[0m17:55:30.301215 [debug] [Thread-1 (]: Database Error in model fraudster_status (models/gold/fraudster_status.sql)
+  Name customerCategory not found inside cd at [56:8]
+  compiled Code at target/run/online_payment/models/gold/fraudster_status.sql
+[0m17:55:30.302461 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '8fddeef4-8a68-43e3-8439-201e91c30644', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e32ef10>]}
+[0m17:55:30.303534 [error] [Thread-1 (]: 8 of 8 ERROR creating sql table model online_payment_marts.fraudster_status .... [[31mERROR[0m in 3.34s]
+[0m17:55:30.304670 [debug] [Thread-1 (]: Finished running node model.online_payment.fraudster_status
+[0m17:55:30.307299 [debug] [MainThread]: Connection 'master' was properly closed.
+[0m17:55:30.307906 [debug] [MainThread]: Connection 'model.online_payment.fraudster_status' was properly closed.
+[0m17:55:30.308445 [debug] [MainThread]: Connection 'model.online_payment.svr_customer_detail' was properly closed.
+[0m17:55:30.308816 [debug] [MainThread]: Connection 'model.online_payment.svr_fraudster_send_nonfraud_trx' was properly closed.
+[0m17:55:30.309306 [info ] [MainThread]: 
+[0m17:55:30.309947 [info ] [MainThread]: Finished running 3 view models, 5 table models in 0 hours 0 minutes and 55.69 seconds (55.69s).
+[0m17:55:30.312730 [debug] [MainThread]: Command end result
+[0m17:55:30.333413 [info ] [MainThread]: 
+[0m17:55:30.334073 [info ] [MainThread]: [31mCompleted with 1 error and 0 warnings:[0m
+[0m17:55:30.334663 [info ] [MainThread]: 
+[0m17:55:30.335249 [error] [MainThread]:   Database Error in model fraudster_status (models/gold/fraudster_status.sql)
+  Name customerCategory not found inside cd at [56:8]
+  compiled Code at target/run/online_payment/models/gold/fraudster_status.sql
+[0m17:55:30.335820 [info ] [MainThread]: 
+[0m17:55:30.336387 [info ] [MainThread]: Done. PASS=7 WARN=0 ERROR=1 SKIP=0 TOTAL=8
+[0m17:55:30.339847 [debug] [MainThread]: Resource report: {"command_name": "run", "command_wall_clock_time": 58.04914, "process_user_time": 6.929953, "process_kernel_time": 1.149433, "process_mem_max_rss": "193622016", "command_success": false, "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m17:55:30.341277 [debug] [MainThread]: Command `dbt run` failed at 17:55:30.340923 after 58.05 seconds
+[0m17:55:30.342167 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x110219ed0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x110518790>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x110187ad0>]}
+[0m17:55:30.342841 [debug] [MainThread]: Flushing usage events
+[0m17:55:39.528671 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10c684290>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10c0378d0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10c043850>]}
+
+
+============================== 17:55:39.537876 | 89f9874f-224f-4450-a2c5-881fd419c603 ==============================
+[0m17:55:39.537876 [info ] [MainThread]: Running with dbt=1.7.2
+[0m17:55:39.538954 [debug] [MainThread]: running dbt with arguments {'printer_width': '80', 'indirect_selection': 'eager', 'log_cache_events': 'False', 'write_json': 'True', 'partial_parse': 'True', 'cache_selected_only': 'False', 'profiles_dir': '/Users/rennykurniasari/.dbt', 'debug': 'False', 'warn_error': 'None', 'log_path': '/Users/rennykurniasari/Desktop/DF11/final_project/dbt/online_payment/logs', 'fail_fast': 'False', 'version_check': 'True', 'use_colors': 'True', 'use_experimental_parser': 'False', 'no_print': 'None', 'quiet': 'False', 'log_format': 'default', 'invocation_command': 'dbt run --select +fraudster_status', 'introspect': 'True', 'static_parser': 'True', 'target_path': 'None', 'warn_error_options': 'WarnErrorOptions(include=[], exclude=[])', 'send_anonymous_usage_stats': 'True'}
+[0m17:55:40.809981 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'project_id', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a117450>]}
+[0m17:55:40.982600 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'adapter_info', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x119867410>]}
+[0m17:55:40.983697 [info ] [MainThread]: Registered adapter: bigquery=1.6.7
+[0m17:55:41.007869 [debug] [MainThread]: checksum: 61e99fc04fd80d06ce91efefd25c0802dcce8a048167599a1a188233d6ce8ed9, vars: {}, profile: , target: , version: 1.7.2
+[0m17:55:41.074503 [debug] [MainThread]: Partial parsing enabled: 0 files deleted, 0 files added, 1 files changed.
+[0m17:55:41.075364 [debug] [MainThread]: Partial parsing: updated file: online_payment://models/gold/fraudster_status.sql
+[0m17:55:41.250837 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'load_project', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a4e2590>]}
+[0m17:55:41.269794 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'resource_counts', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a560490>]}
+[0m17:55:41.270664 [info ] [MainThread]: Found 20 models, 9 sources, 0 exposures, 0 metrics, 444 macros, 0 groups, 0 semantic models
+[0m17:55:41.271458 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a2b7610>]}
+[0m17:55:41.274611 [info ] [MainThread]: 
+[0m17:55:41.275893 [debug] [MainThread]: Acquiring new bigquery connection 'master'
+[0m17:55:41.278104 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m17:55:41.278728 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m17:55:41.280163 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m17:55:41.281970 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m17:55:41.282477 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m17:55:41.283138 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m17:55:42.642332 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_marts)
+[0m17:55:42.643800 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_transformed)
+[0m17:55:42.644405 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m17:55:42.645504 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_raw)
+[0m17:55:42.646281 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m17:55:42.647050 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m17:55:43.224958 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a25ad50>]}
+[0m17:55:43.226206 [info ] [MainThread]: Concurrency: 3 threads (target='dev')
+[0m17:55:43.226777 [info ] [MainThread]: 
+[0m17:55:43.232317 [debug] [Thread-1 (]: Began running node model.online_payment.brz_fraud_confirmation
+[0m17:55:43.233061 [debug] [Thread-2 (]: Began running node model.online_payment.brz_transactions_merge
+[0m17:55:43.233868 [info ] [Thread-1 (]: 1 of 8 START sql view model online_payment_raw.brz_fraud_confirmation .......... [RUN]
+[0m17:55:43.234692 [info ] [Thread-2 (]: 2 of 8 START sql view model online_payment_raw.brz_transactions_merge .......... [RUN]
+[0m17:55:43.235961 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_marts, now model.online_payment.brz_fraud_confirmation)
+[0m17:55:43.236920 [debug] [Thread-2 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_transformed, now model.online_payment.brz_transactions_merge)
+[0m17:55:43.237533 [debug] [Thread-1 (]: Began compiling node model.online_payment.brz_fraud_confirmation
+[0m17:55:43.238089 [debug] [Thread-2 (]: Began compiling node model.online_payment.brz_transactions_merge
+[0m17:55:43.272221 [debug] [Thread-2 (]: Writing injected SQL for node "model.online_payment.brz_transactions_merge"
+[0m17:55:43.276992 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.brz_fraud_confirmation"
+[0m17:55:43.278406 [debug] [Thread-2 (]: Timing info for model.online_payment.brz_transactions_merge (compile): 17:55:43.262541 => 17:55:43.277830
+[0m17:55:43.279075 [debug] [Thread-2 (]: Began executing node model.online_payment.brz_transactions_merge
+[0m17:55:43.309442 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_fraud_confirmation (compile): 17:55:43.238484 => 17:55:43.309019
+[0m17:55:43.321381 [debug] [Thread-2 (]: Writing runtime sql for node "model.online_payment.brz_transactions_merge"
+[0m17:55:43.322071 [debug] [Thread-1 (]: Began executing node model.online_payment.brz_fraud_confirmation
+[0m17:55:43.326439 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.brz_fraud_confirmation"
+[0m17:55:43.327536 [debug] [Thread-2 (]: Opening a new connection, currently in state closed
+[0m17:55:43.328265 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m17:55:43.383703 [debug] [Thread-2 (]: On model.online_payment.brz_transactions_merge: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions_merge"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+  OPTIONS()
+  as SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_1`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_2`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_3`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_4`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_5`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_6`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_7`
+ORDER BY step;
+
+
+[0m17:55:43.384627 [debug] [Thread-1 (]: On model.online_payment.brz_fraud_confirmation: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_fraud_confirmation"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_fraud_confirmation`
+  OPTIONS()
+  as WITH source AS (
+
+    SELECT * FROM `final-project-404104`.`online_payment`.`fraud_confirmation`
+
+)
+
+SELECT
+    idTransaction as transactionID,
+    timestamp as transactionDatetime,
+    type,
+    ROUND(amount, 2) as amount,
+    CAST(isFraud as BOOLEAN) as isFraud,
+    CAST(isFlaggedFraud as BOOLEAN) as isFlaggedFraud,
+    CAST(confirm as BOOLEAN) as isConfirmed,
+    CAST(isTrueFraud as BOOLEAN) as isTrueFraud,
+    nameOrigin as nameOrig,
+    ROUND(oldBalanceOrigin, 2) as oldBalanceOrig,
+    ROUND(newBalanceOrigin, 2) as newBalanceOrig,
+    nameDest,
+    ROUND(oldbalanceDest, 2) as oldBalanceDest,
+    ROUND(newbalanceDest, 2) as newBalanceDest,
+    CAST(refund as BOOLEAN) as isRefunded,
+    ROUND(oldBalanceOriginSet, 2) as oldBalanceOrigSet,
+    ROUND(newBalanceOriginSet, 2) as newBalanceOrigSet,
+    ROUND(oldBalanceDestSet, 2) as oldBalanceDestSet,
+    ROUND(newBalanceDestSet, 2) as newBalanceDestSet
+FROM
+    source
+ORDER BY transactionID;
+
+
+[0m17:55:44.096469 [debug] [Thread-2 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:804bbd88-bac9-40ce-bfd6-956198ba83e4&page=queryresults
+[0m17:55:44.235456 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:2dbafdcd-f6e9-4454-9702-337f72f6ab83&page=queryresults
+[0m17:55:44.742824 [debug] [Thread-2 (]: Timing info for model.online_payment.brz_transactions_merge (execute): 17:55:43.279451 => 17:55:44.742492
+[0m17:55:44.744003 [debug] [Thread-2 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a3d1ad0>]}
+[0m17:55:44.744891 [info ] [Thread-2 (]: 2 of 8 OK created sql view model online_payment_raw.brz_transactions_merge ..... [[32mCREATE VIEW (0 processed)[0m in 1.51s]
+[0m17:55:44.745859 [debug] [Thread-2 (]: Finished running node model.online_payment.brz_transactions_merge
+[0m17:55:44.746742 [debug] [Thread-3 (]: Began running node model.online_payment.brz_transactions
+[0m17:55:44.747428 [info ] [Thread-3 (]: 3 of 8 START sql view model online_payment_raw.brz_transactions ................ [RUN]
+[0m17:55:44.748498 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_raw, now model.online_payment.brz_transactions)
+[0m17:55:44.749087 [debug] [Thread-3 (]: Began compiling node model.online_payment.brz_transactions
+[0m17:55:44.753282 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.brz_transactions"
+[0m17:55:44.754413 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (compile): 17:55:44.749453 => 17:55:44.754073
+[0m17:55:44.754957 [debug] [Thread-3 (]: Began executing node model.online_payment.brz_transactions
+[0m17:55:44.759158 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.brz_transactions"
+[0m17:55:44.760151 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m17:55:44.808634 [debug] [Thread-3 (]: On model.online_payment.brz_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions`
+  OPTIONS()
+  as WITH NumberedRows AS (
+
+    SELECT
+        *,
+        ROW_NUMBER() OVER (ORDER BY payment_datetime) AS row_num
+    FROM `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+
+)
+
+SELECT
+    CONCAT('P', LPAD(CAST(row_num AS STRING), 10, '0'), '_', FORMAT_TIMESTAMP('%Y%m%d%H%M%S', payment_datetime)) AS transactionID,
+    payment_datetime as transactionDatetime,
+    type,
+    ROUND(amount, 2) as amount,
+    nameOrig,
+    ROUND(oldbalanceOrg, 2) as oldBalanceOrig,
+    ROUND(newbalanceOrig, 2) as newBalanceOrig,
+    nameDest,
+    ROUND(oldbalanceDest, 2) as oldBalanceDest,
+    ROUND(newbalanceDest, 2) as newBalanceDest,
+    CAST(isFraud as BOOLEAN) as isFraud,
+    CAST(isFlaggedFraud as BOOLEAN) as isFlaggedFraud,
+    step
+FROM
+    NumberedRows
+ORDER BY transactionID;
+
+
+[0m17:55:44.875022 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_fraud_confirmation (execute): 17:55:43.322725 => 17:55:44.874537
+[0m17:55:44.876697 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a5f2350>]}
+[0m17:55:44.877869 [info ] [Thread-1 (]: 1 of 8 OK created sql view model online_payment_raw.brz_fraud_confirmation ..... [[32mCREATE VIEW (0 processed)[0m in 1.64s]
+[0m17:55:44.879266 [debug] [Thread-1 (]: Finished running node model.online_payment.brz_fraud_confirmation
+[0m17:55:44.880503 [debug] [Thread-2 (]: Began running node model.online_payment.svr_fraud_detail
+[0m17:55:44.881880 [info ] [Thread-2 (]: 4 of 8 START sql table model online_payment_transformed.svr_fraud_detail ....... [RUN]
+[0m17:55:44.884370 [debug] [Thread-2 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions_merge, now model.online_payment.svr_fraud_detail)
+[0m17:55:44.885734 [debug] [Thread-2 (]: Began compiling node model.online_payment.svr_fraud_detail
+[0m17:55:44.889940 [debug] [Thread-2 (]: Writing injected SQL for node "model.online_payment.svr_fraud_detail"
+[0m17:55:44.891040 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_fraud_detail (compile): 17:55:44.886141 => 17:55:44.890706
+[0m17:55:44.891606 [debug] [Thread-2 (]: Began executing node model.online_payment.svr_fraud_detail
+[0m17:55:44.905623 [debug] [Thread-2 (]: Opening a new connection, currently in state closed
+[0m17:55:45.487299 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:b4cf5983-3579-4f1a-9686-b2b86e2a8b18&page=queryresults
+[0m17:55:45.541919 [debug] [Thread-2 (]: Writing runtime sql for node "model.online_payment.svr_fraud_detail"
+[0m17:55:45.543062 [debug] [Thread-2 (]: On model.online_payment.svr_fraud_detail: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_fraud_detail"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_fraud_detail`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_fraud_confirmation`
+)
+
+SELECT
+    transactionID,
+    transactionDatetime,
+    type,
+    amount,
+    isFraud,
+    isFlaggedFraud,
+    isConfirmed,
+    isTrueFraud,
+    nameOrig,
+    oldBalanceOrig,
+    newBalanceOrig,
+    nameDest,
+    oldBalanceDest,
+    newBalanceDest
+FROM
+    source
+ORDER BY transactionID
+    );
+  
+[0m17:55:46.150028 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (execute): 17:55:44.755302 => 17:55:46.149409
+[0m17:55:46.151998 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a62be90>]}
+[0m17:55:46.153155 [info ] [Thread-3 (]: 3 of 8 OK created sql view model online_payment_raw.brz_transactions ........... [[32mCREATE VIEW (0 processed)[0m in 1.40s]
+[0m17:55:46.154542 [debug] [Thread-3 (]: Finished running node model.online_payment.brz_transactions
+[0m17:55:46.155722 [debug] [Thread-1 (]: Began running node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:55:46.157200 [debug] [Thread-3 (]: Began running node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:55:46.156523 [info ] [Thread-1 (]: 5 of 8 START sql table model online_payment_transformed.svr_fraudster_receive_nonfraud_trx  [RUN]
+[0m17:55:46.158182 [info ] [Thread-3 (]: 6 of 8 START sql table model online_payment_transformed.svr_fraudster_send_nonfraud_trx  [RUN]
+[0m17:55:46.159423 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_fraud_confirmation, now model.online_payment.svr_fraudster_receive_nonfraud_trx)
+[0m17:55:46.160385 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions, now model.online_payment.svr_fraudster_send_nonfraud_trx)
+[0m17:55:46.160976 [debug] [Thread-1 (]: Began compiling node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:55:46.161536 [debug] [Thread-3 (]: Began compiling node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:55:46.179975 [debug] [Thread-2 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:fd5f7080-d30d-4b35-9aff-8777862c6e5f&page=queryresults
+[0m17:55:46.184906 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.svr_fraudster_receive_nonfraud_trx"
+[0m17:55:46.189094 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.svr_fraudster_send_nonfraud_trx"
+[0m17:55:46.192537 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_fraudster_receive_nonfraud_trx (compile): 17:55:46.161910 => 17:55:46.191817
+[0m17:55:46.193728 [debug] [Thread-1 (]: Began executing node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:55:46.195284 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_fraudster_send_nonfraud_trx (compile): 17:55:46.185373 => 17:55:46.194892
+[0m17:55:46.198800 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m17:55:46.199785 [debug] [Thread-3 (]: Began executing node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:55:46.203921 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m17:55:46.800724 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.svr_fraudster_receive_nonfraud_trx"
+[0m17:55:46.802753 [debug] [Thread-1 (]: On model.online_payment.svr_fraudster_receive_nonfraud_trx: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_fraudster_receive_nonfraud_trx"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_fraudster_receive_nonfraud_trx`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+fraudulent_transactions AS (
+    SELECT
+        DISTINCT nameDest
+    FROM source
+    WHERE isFraud = True
+)
+
+SELECT 
+    nft.nameDest as customerID,
+    nft.transactionID,
+    nft.transactionDatetime,
+    COUNT(*) AS nonFraudulentTransactionCount
+FROM 
+    source nft
+INNER JOIN 
+    fraudulent_transactions ft ON nft.nameDest = ft.nameDest
+WHERE 
+    nft.isFraud = False 
+GROUP BY 
+    nft.nameDest,
+    nft.transactionID,
+    nft.transactionDatetime
+ORDER BY
+    nft.transactionDatetime
+    );
+  
+[0m17:55:46.830290 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.svr_fraudster_send_nonfraud_trx"
+[0m17:55:46.832694 [debug] [Thread-3 (]: On model.online_payment.svr_fraudster_send_nonfraud_trx: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_fraudster_send_nonfraud_trx"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_fraudster_send_nonfraud_trx`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+fraudulent_senders AS (
+    SELECT
+        DISTINCT nameDest
+    FROM source
+    WHERE isFraud = True
+)
+
+SELECT 
+    s.nameDest as customerID,
+    s.transactionID, 
+    s.transactionDatetime
+FROM 
+    source s
+JOIN 
+    fraudulent_senders fs ON s.nameOrig = fs.nameDest
+WHERE 
+    s.isFraud = False
+    );
+  
+[0m17:55:47.488243 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:d60c6cb3-3a13-4dc8-bdce-e74b61e002da&page=queryresults
+[0m17:55:47.509077 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:77681e51-9461-420c-81d6-a1aad9181678&page=queryresults
+[0m17:55:48.824119 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_fraud_detail (execute): 17:55:44.891950 => 17:55:48.823481
+[0m17:55:48.826209 [debug] [Thread-2 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a6bcc10>]}
+[0m17:55:48.827580 [info ] [Thread-2 (]: 4 of 8 OK created sql table model online_payment_transformed.svr_fraud_detail .. [[32mCREATE TABLE (8.2k rows, 1.1 MiB processed)[0m in 3.94s]
+[0m17:55:48.828849 [debug] [Thread-2 (]: Finished running node model.online_payment.svr_fraud_detail
+[0m17:55:59.078099 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_fraudster_send_nonfraud_trx (execute): 17:55:46.200385 => 17:55:59.077478
+[0m17:55:59.080123 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a588710>]}
+[0m17:55:59.081317 [info ] [Thread-3 (]: 6 of 8 OK created sql table model online_payment_transformed.svr_fraudster_send_nonfraud_trx  [[32mCREATE TABLE (18.0 rows, 248.6 MiB processed)[0m in 12.92s]
+[0m17:55:59.082651 [debug] [Thread-3 (]: Finished running node model.online_payment.svr_fraudster_send_nonfraud_trx
+[0m17:56:08.996342 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_fraudster_receive_nonfraud_trx (execute): 17:55:46.195868 => 17:56:08.995713
+[0m17:56:08.998404 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a57b650>]}
+[0m17:56:08.999634 [info ] [Thread-1 (]: 5 of 8 OK created sql table model online_payment_transformed.svr_fraudster_receive_nonfraud_trx  [[32mCREATE TABLE (57.4k rows, 172.8 MiB processed)[0m in 22.84s]
+[0m17:56:09.000972 [debug] [Thread-1 (]: Finished running node model.online_payment.svr_fraudster_receive_nonfraud_trx
+[0m17:56:09.002415 [debug] [Thread-2 (]: Began running node model.online_payment.svr_customer_detail
+[0m17:56:09.003400 [info ] [Thread-2 (]: 7 of 8 START sql table model online_payment_transformed.svr_customer_detail .... [RUN]
+[0m17:56:09.004652 [debug] [Thread-2 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_fraud_detail, now model.online_payment.svr_customer_detail)
+[0m17:56:09.005320 [debug] [Thread-2 (]: Began compiling node model.online_payment.svr_customer_detail
+[0m17:56:09.011227 [debug] [Thread-2 (]: Writing injected SQL for node "model.online_payment.svr_customer_detail"
+[0m17:56:09.012441 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_customer_detail (compile): 17:56:09.005738 => 17:56:09.012090
+[0m17:56:09.013014 [debug] [Thread-2 (]: Began executing node model.online_payment.svr_customer_detail
+[0m17:56:09.016342 [debug] [Thread-2 (]: Opening a new connection, currently in state closed
+[0m17:56:09.637545 [debug] [Thread-2 (]: Writing runtime sql for node "model.online_payment.svr_customer_detail"
+[0m17:56:09.640108 [debug] [Thread-2 (]: On model.online_payment.svr_customer_detail: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_customer_detail"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_customer_detail`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+od_customer_trx AS (
+    SELECT
+        d.nameDest as nameDest_d,
+        o.nameOrig as nameOrig_o,
+    FROM source d
+    LEFT JOIN source o ON d.nameDest = o.nameOrig
+    WHERE d.transactionID <> o.transactionID
+),
+
+od_customer AS (
+    SELECT
+        DISTINCT nameOrig_o as nameDest,
+        CASE WHEN nameOrig_o = nameDest_d THEN True ELSE False END AS isOrig,
+        CASE WHEN nameOrig_o = nameDest_d THEN True ELSE False END AS isDest
+    FROM od_customer_trx
+),
+
+o_customer AS (
+    SELECT
+        DISTINCT nameOrig,
+        CASE WHEN nameOrig IS NOT NULL THEN True ELSE False END AS isOrig,
+        CASE WHEN nameOrig IS NOT NULL THEN False ELSE True END AS isDest
+    FROM source
+    EXCEPT DISTINCT
+    SELECT
+        nameDest, isOrig, isDest
+    FROM od_customer
+),
+
+d_customer AS (
+    SELECT
+        DISTINCT nameDest,
+        CASE WHEN nameDest IS NOT NULL THEN False ELSE True END AS isOrig,
+        CASE WHEN nameDest IS NOT NULL THEN True ELSE False END AS isDest
+    FROM source
+    EXCEPT DISTINCT
+    SELECT
+        nameDest, isOrig, isDest
+    FROM od_customer
+),
+
+merge_customer AS (
+    SELECT * FROM od_customer
+    UNION ALL
+    SELECT * FROM o_customer
+    UNION ALL
+    SELECT * FROM d_customer
+),
+
+unique_customers AS (
+    SELECT
+        nameDest as customerID,
+        isOrig,
+        isDest
+    FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (PARTITION BY nameDest ORDER BY isOrig DESC) AS row_num
+        FROM merge_customer
+    )
+    WHERE row_num = 1
+),
+
+customer_rfm AS (
+  SELECT
+    nameOrig,
+    DATE_DIFF(DATE(CURRENT_DATETIME()), DATE(MAX(transactionDatetime)), DAY) AS recencyDays,
+    COUNT(*) AS frequency,
+    ROUND(SUM(amount), 2) AS monetaryValue
+  FROM source
+  GROUP BY nameOrig
+),
+
+fraudulent_activity AS (
+    SELECT
+        DISTINCT nameDest AS customerID
+    FROM source
+    WHERE isFraud = True
+),
+
+suspect_activity AS (
+    SELECT
+        DISTINCT nameOrig AS customerID
+    FROM source
+    WHERE nameDest IN (SELECT customerID FROM `final-project-404104`.`online_payment_transformed`.`svr_fraudster_receive_nonfraud_trx`) AND isFraud = False
+    UNION DISTINCT
+    SELECT
+        DISTINCT customerID
+    FROM `final-project-404104`.`online_payment_transformed`.`svr_fraudster_send_nonfraud_trx`
+),
+
+victim_activity AS (
+    SELECT
+        DISTINCT nameOrig AS customerID
+    FROM source
+    WHERE isFraud = True
+),
+
+customer_detail AS (
+    SELECT
+        uc.customerID,
+        uc.isOrig,
+        uc.isDest,
+        CASE 
+            WHEN uc.isOrig = True AND uc.isDest=False THEN 'Sender'
+            WHEN uc.isOrig = False AND uc.isDest=True THEN 'Receiver'
+            WHEN uc.isOrig = True AND uc.isDest = True THEN 'Transactor'
+        END AS customerCategory,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.recencyDays
+            ELSE DATE_DIFF(DATE(CURRENT_DATETIME()), DATE('2022-12-31'), DAY)
+        END AS recencyDays,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.frequency
+            ELSE 0
+        END AS frequency,
+        CASE
+            WHEN (uc.isOrig = True AND uc.isDest = True)
+            OR (uc.isOrig = True AND uc.isDest = False) THEN cr.monetaryValue
+            ELSE 0
+        END AS monetaryValue,
+        CASE
+            WHEN fa.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isFraudAccount,
+        CASE
+            WHEN sa.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isSuspectAccount,
+        CASE
+            WHEN va.CustomerID IS NOT NULL THEN True ELSE False
+        END AS isVictimAccount
+    FROM unique_customers uc
+    LEFT JOIN customer_rfm cr ON uc.customerID = cr.nameOrig
+    LEFT JOIN fraudulent_activity fa ON uc.customerID = fa.customerID
+    LEFT JOIN suspect_activity sa ON uc.customerID = sa.customerID
+    LEFT JOIN victim_activity va ON uc.customerID = va.customerID
+    GROUP BY uc.customerID, uc.isOrig, uc.isDest, cr.recencyDays, cr.frequency, cr.monetaryValue, fa.CustomerID, sa.CustomerID, va.CustomerID
+)
+
+SELECT *,
+    CASE 
+        WHEN (isFraudAccount = True AND isSuspectAccount=False) OR (isFraudAccount = True AND isSuspectAccount=True) THEN 'Fraudster'
+        WHEN isFraudAccount = False AND isSuspectAccount=True THEN 'Fraud Suspect'
+        WHEN isVictimAccount = True THEN 'Victim'
+        WHEN isFraudAccount = False AND isSuspectAccount = False THEN 'Not Affiliated'
+    END AS customerStatus 
+FROM customer_detail
+    );
+  
+[0m17:56:10.396174 [debug] [Thread-2 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:54ee8362-9ad8-4d05-9f5f-c04fd01faf75&page=queryresults
+[0m17:56:33.504270 [debug] [Thread-2 (]: Timing info for model.online_payment.svr_customer_detail (execute): 17:56:09.013458 => 17:56:33.503654
+[0m17:56:33.506347 [debug] [Thread-2 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a6a4550>]}
+[0m17:56:33.507468 [info ] [Thread-2 (]: 7 of 8 OK created sql table model online_payment_transformed.svr_customer_detail  [[32mCREATE TABLE (9.1m rows, 297.8 MiB processed)[0m in 24.50s]
+[0m17:56:33.508856 [debug] [Thread-2 (]: Finished running node model.online_payment.svr_customer_detail
+[0m17:56:33.510240 [debug] [Thread-1 (]: Began running node model.online_payment.fraudster_status
+[0m17:56:33.511166 [info ] [Thread-1 (]: 8 of 8 START sql table model online_payment_marts.fraudster_status ............. [RUN]
+[0m17:56:33.512385 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_fraudster_receive_nonfraud_trx, now model.online_payment.fraudster_status)
+[0m17:56:33.513053 [debug] [Thread-1 (]: Began compiling node model.online_payment.fraudster_status
+[0m17:56:33.518114 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.fraudster_status"
+[0m17:56:33.519408 [debug] [Thread-1 (]: Timing info for model.online_payment.fraudster_status (compile): 17:56:33.513471 => 17:56:33.518933
+[0m17:56:33.520023 [debug] [Thread-1 (]: Began executing node model.online_payment.fraudster_status
+[0m17:56:33.523422 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m17:56:34.120055 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.fraudster_status"
+[0m17:56:34.122256 [debug] [Thread-1 (]: On model.online_payment.fraudster_status: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.fraudster_status"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_marts`.`fraudster_status`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+fraud_detail AS (
+    SELECT * FROM `final-project-404104`.`online_payment_transformed`.`svr_fraud_detail`
+),
+
+frequent_fraudsters AS (
+    SELECT DISTINCT
+        nameDest AS customerID,
+        occurs AS fraudOccurs
+    FROM (
+        SELECT
+            *,
+            COUNT(transactionID) OVER (PARTITION BY nameDest) AS occurs
+        FROM source
+        WHERE isFraud = True
+    ) AS t
+    WHERE occurs > 1
+),
+
+fraudulent_transactions AS (
+    SELECT DISTINCT
+        nameDest
+    FROM fraud_detail
+),
+
+customer_detail AS (
+    SELECT
+        DISTINCT customerID,
+        customerCategory,
+        recencyDays,
+        frequency,
+        monetaryValue
+    FROM `final-project-404104`.`online_payment_transformed`.`svr_customer_detail`
+)
+
+SELECT 
+    ft.nameDest AS customerID,
+    CASE 
+        WHEN ft.nameDest IN (SELECT customerID FROM frequent_fraudsters) THEN 'Frequent Fraudster'
+        ELSE 'Infrequent Fraudster'
+    END AS fraudsterCategory,
+    cd.customerCategory,
+    cd.recencyDays,
+    cd.frequency,
+    cd.monetaryValue
+FROM fraudulent_transactions ft
+LEFT JOIN customer_detail cd ON ft.nameDest = cd.customerID
+    );
+  
+[0m17:56:34.731659 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:d1c2fe9b-c90e-4238-863f-38a5760aa541&page=queryresults
+[0m17:56:43.930375 [debug] [Thread-1 (]: Timing info for model.online_payment.fraudster_status (execute): 17:56:33.520393 => 17:56:43.929984
+[0m17:56:43.931559 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': '89f9874f-224f-4450-a2c5-881fd419c603', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11a74ca10>]}
+[0m17:56:43.932410 [info ] [Thread-1 (]: 8 of 8 OK created sql table model online_payment_marts.fraudster_status ........ [[32mCREATE TABLE (8.2k rows, 563.0 MiB processed)[0m in 10.42s]
+[0m17:56:43.933481 [debug] [Thread-1 (]: Finished running node model.online_payment.fraudster_status
+[0m17:56:43.936269 [debug] [MainThread]: Connection 'master' was properly closed.
+[0m17:56:43.936811 [debug] [MainThread]: Connection 'model.online_payment.fraudster_status' was properly closed.
+[0m17:56:43.937262 [debug] [MainThread]: Connection 'model.online_payment.svr_customer_detail' was properly closed.
+[0m17:56:43.937838 [debug] [MainThread]: Connection 'model.online_payment.svr_fraudster_send_nonfraud_trx' was properly closed.
+[0m17:56:43.938474 [info ] [MainThread]: 
+[0m17:56:43.939079 [info ] [MainThread]: Finished running 3 view models, 5 table models in 0 hours 1 minutes and 2.66 seconds (62.66s).
+[0m17:56:43.941654 [debug] [MainThread]: Command end result
+[0m17:56:43.955586 [info ] [MainThread]: 
+[0m17:56:43.956287 [info ] [MainThread]: [32mCompleted successfully[0m
+[0m17:56:43.956934 [info ] [MainThread]: 
+[0m17:56:43.957567 [info ] [MainThread]: Done. PASS=8 WARN=0 ERROR=0 SKIP=0 TOTAL=8
+[0m17:56:43.963741 [debug] [MainThread]: Resource report: {"command_name": "run", "command_success": true, "command_wall_clock_time": 64.51752, "process_user_time": 6.620133, "process_kernel_time": 0.986269, "process_mem_max_rss": "194330624", "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m17:56:43.965179 [debug] [MainThread]: Command `dbt run` succeeded at 17:56:43.964922 after 64.52 seconds
+[0m17:56:43.966032 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10c684090>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10c2f9050>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10c0cd390>]}
+[0m17:56:43.966707 [debug] [MainThread]: Flushing usage events
+[0m22:21:34.624830 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10bb20c10>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10a92e550>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10bb20cd0>]}
+
+
+============================== 22:21:34.637675 | b00d5a5b-686c-4b61-940b-9b07595bbe3c ==============================
+[0m22:21:34.637675 [info ] [MainThread]: Running with dbt=1.7.2
+[0m22:21:34.639175 [debug] [MainThread]: running dbt with arguments {'printer_width': '80', 'indirect_selection': 'eager', 'write_json': 'True', 'log_cache_events': 'False', 'partial_parse': 'True', 'cache_selected_only': 'False', 'profiles_dir': '/Users/rennykurniasari/.dbt', 'version_check': 'True', 'fail_fast': 'False', 'log_path': '/Users/rennykurniasari/Desktop/DF11/final_project/dbt/online_payment/logs', 'warn_error': 'None', 'debug': 'False', 'use_colors': 'True', 'use_experimental_parser': 'False', 'no_print': 'None', 'quiet': 'False', 'log_format': 'default', 'static_parser': 'True', 'introspect': 'True', 'warn_error_options': 'WarnErrorOptions(include=[], exclude=[])', 'target_path': 'None', 'invocation_command': 'dbt run --select +invalid_transactions', 'send_anonymous_usage_stats': 'True'}
+[0m22:21:36.405204 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'project_id', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x119801b10>]}
+[0m22:21:36.577800 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'adapter_info', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x118f15410>]}
+[0m22:21:36.580553 [info ] [MainThread]: Registered adapter: bigquery=1.6.7
+[0m22:21:36.613563 [debug] [MainThread]: checksum: 61e99fc04fd80d06ce91efefd25c0802dcce8a048167599a1a188233d6ce8ed9, vars: {}, profile: , target: , version: 1.7.2
+[0m22:21:36.755103 [debug] [MainThread]: Partial parsing enabled: 0 files deleted, 1 files added, 0 files changed.
+[0m22:21:36.755968 [debug] [MainThread]: Partial parsing: added file: online_payment://models/gold/invalid_transactions.sql
+[0m22:21:37.025600 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'load_project', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x119a13750>]}
+[0m22:21:37.063643 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'resource_counts', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1199e8350>]}
+[0m22:21:37.064724 [info ] [MainThread]: Found 21 models, 9 sources, 0 exposures, 0 metrics, 444 macros, 0 groups, 0 semantic models
+[0m22:21:37.065433 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11997bd50>]}
+[0m22:21:37.068197 [info ] [MainThread]: 
+[0m22:21:37.069435 [debug] [MainThread]: Acquiring new bigquery connection 'master'
+[0m22:21:37.071261 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:21:37.072325 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:21:37.073299 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:21:37.073942 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:21:37.074667 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:21:37.075201 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:21:38.394400 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_raw)
+[0m22:21:38.395474 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:21:38.458006 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_marts)
+[0m22:21:38.473998 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:21:38.481531 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_transformed)
+[0m22:21:38.482376 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:21:39.209735 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1199d58d0>]}
+[0m22:21:39.211164 [info ] [MainThread]: Concurrency: 3 threads (target='dev')
+[0m22:21:39.212040 [info ] [MainThread]: 
+[0m22:21:39.217461 [debug] [Thread-1 (]: Began running node model.online_payment.brz_transactions_merge
+[0m22:21:39.218393 [info ] [Thread-1 (]: 1 of 4 START sql view model online_payment_raw.brz_transactions_merge .......... [RUN]
+[0m22:21:39.219813 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_raw, now model.online_payment.brz_transactions_merge)
+[0m22:21:39.220981 [debug] [Thread-1 (]: Began compiling node model.online_payment.brz_transactions_merge
+[0m22:21:39.292112 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.brz_transactions_merge"
+[0m22:21:39.295044 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_transactions_merge (compile): 22:21:39.221704 => 22:21:39.294542
+[0m22:21:39.295979 [debug] [Thread-1 (]: Began executing node model.online_payment.brz_transactions_merge
+[0m22:21:39.346995 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.brz_transactions_merge"
+[0m22:21:39.349411 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:21:39.421748 [debug] [Thread-1 (]: On model.online_payment.brz_transactions_merge: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions_merge"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+  OPTIONS()
+  as SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_1`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_2`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_3`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_4`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_5`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_6`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_7`
+ORDER BY step;
+
+
+[0m22:21:40.188139 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:741ddeab-8e4c-4339-a559-8372ccf50366&page=queryresults
+[0m22:21:40.941057 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_transactions_merge (execute): 22:21:39.296490 => 22:21:40.940694
+[0m22:21:40.942551 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1174d15d0>]}
+[0m22:21:40.943895 [info ] [Thread-1 (]: 1 of 4 OK created sql view model online_payment_raw.brz_transactions_merge ..... [[32mCREATE VIEW (0 processed)[0m in 1.72s]
+[0m22:21:40.945182 [debug] [Thread-1 (]: Finished running node model.online_payment.brz_transactions_merge
+[0m22:21:40.946629 [debug] [Thread-3 (]: Began running node model.online_payment.brz_transactions
+[0m22:21:40.947565 [info ] [Thread-3 (]: 2 of 4 START sql view model online_payment_raw.brz_transactions ................ [RUN]
+[0m22:21:40.948867 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_transformed, now model.online_payment.brz_transactions)
+[0m22:21:40.949714 [debug] [Thread-3 (]: Began compiling node model.online_payment.brz_transactions
+[0m22:21:40.954614 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.brz_transactions"
+[0m22:21:40.957841 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (compile): 22:21:40.950183 => 22:21:40.957343
+[0m22:21:40.958630 [debug] [Thread-3 (]: Began executing node model.online_payment.brz_transactions
+[0m22:21:40.963773 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.brz_transactions"
+[0m22:21:40.966317 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m22:21:41.097483 [debug] [Thread-3 (]: On model.online_payment.brz_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions`
+  OPTIONS()
+  as WITH NumberedRows AS (
+
+    SELECT
+        *,
+        ROW_NUMBER() OVER (ORDER BY payment_datetime) AS row_num
+    FROM `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+
+)
+
+SELECT
+    CONCAT('P', LPAD(CAST(row_num AS STRING), 10, '0'), '_', FORMAT_TIMESTAMP('%Y%m%d%H%M%S', payment_datetime)) AS transactionID,
+    payment_datetime as transactionDatetime,
+    type,
+    ROUND(amount, 2) as amount,
+    nameOrig,
+    ROUND(oldbalanceOrg, 2) as oldBalanceOrig,
+    ROUND(newbalanceOrig, 2) as newBalanceOrig,
+    nameDest,
+    ROUND(oldbalanceDest, 2) as oldBalanceDest,
+    ROUND(newbalanceDest, 2) as newBalanceDest,
+    CAST(isFraud as BOOLEAN) as isFraud,
+    CAST(isFlaggedFraud as BOOLEAN) as isFlaggedFraud,
+    step
+FROM
+    NumberedRows
+ORDER BY transactionID;
+
+
+[0m22:21:41.870407 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:e93edddf-ab51-408d-b1e2-7cc5acb2ce21&page=queryresults
+[0m22:21:42.533249 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (execute): 22:21:40.959266 => 22:21:42.532894
+[0m22:21:42.536036 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x119799990>]}
+[0m22:21:42.537288 [info ] [Thread-3 (]: 2 of 4 OK created sql view model online_payment_raw.brz_transactions ........... [[32mCREATE VIEW (0 processed)[0m in 1.59s]
+[0m22:21:42.539533 [debug] [Thread-3 (]: Finished running node model.online_payment.brz_transactions
+[0m22:21:42.542092 [debug] [Thread-1 (]: Began running node model.online_payment.svr_imbalance_transactions
+[0m22:21:42.543029 [info ] [Thread-1 (]: 3 of 4 START sql table model online_payment_transformed.svr_imbalance_transactions  [RUN]
+[0m22:21:42.544409 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions_merge, now model.online_payment.svr_imbalance_transactions)
+[0m22:21:42.545205 [debug] [Thread-1 (]: Began compiling node model.online_payment.svr_imbalance_transactions
+[0m22:21:42.557392 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.svr_imbalance_transactions"
+[0m22:21:42.560754 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_imbalance_transactions (compile): 22:21:42.545635 => 22:21:42.560257
+[0m22:21:42.561533 [debug] [Thread-1 (]: Began executing node model.online_payment.svr_imbalance_transactions
+[0m22:21:42.592311 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:21:43.344491 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.svr_imbalance_transactions"
+[0m22:21:43.349084 [debug] [Thread-1 (]: On model.online_payment.svr_imbalance_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_imbalance_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_imbalance_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+imbalance_transactions AS (
+    SELECT
+        transactionID,
+        transactionDatetime,
+        type,
+        ROUND(amount, 2) as amount,
+        nameOrig,
+        ROUND(oldBalanceOrig, 2) as oldBalanceOrig,
+        ROUND(newbalanceOrig, 2) as newbalanceOrig,
+        nameDest,
+        ROUND(oldbalanceDest, 2) as oldbalanceDest,
+        ROUND(newbalanceDest, 2) as newbalanceDest,
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            
+    (ABS(oldBalanceOrig - amount - newBalanceOrig) <= 0.01 OR
+    ROUND(oldBalanceOrig - amount, 2) = ROUND(newBalanceOrig, 2)) AND
+    (ABS(oldBalanceDest + amount - newBalanceDest) <= 0.01 OR
+    ROUND(oldBalanceDest + amount, 2) = ROUND(newBalanceDest, 2))
+ THEN True
+
+            WHEN type = 'CASH_IN' AND
+            
+    (ABS(oldBalanceOrig + amount - newBalanceOrig) <= 0.01 OR
+    ROUND(oldBalanceOrig + amount, 2) = ROUND(newBalanceOrig, 2)) AND
+    (ABS(oldBalanceDest - amount - newBalanceDest) <= 0.01 OR
+    ROUND(oldBalanceDest - amount, 2) = ROUND(newBalanceDest, 2))
+ THEN True
+
+            ELSE False
+
+        END AS isValid,
+        isFraud,
+        isFlaggedFraud
+    FROM source
+)
+
+SELECT * FROM imbalance_transactions
+ORDER BY transactionID
+    );
+  
+[0m22:21:44.054640 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:dcd2c619-d391-4efc-91d4-4a8993c86b39&page=queryresults
+[0m22:22:06.822023 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_imbalance_transactions (execute): 22:21:42.562003 => 22:22:06.821580
+[0m22:22:06.824882 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x119cb30d0>]}
+[0m22:22:06.825952 [info ] [Thread-1 (]: 3 of 4 OK created sql table model online_payment_transformed.svr_imbalance_transactions  [[32mCREATE TABLE (6.4m rows, 597.0 MiB processed)[0m in 24.28s]
+[0m22:22:06.827583 [debug] [Thread-1 (]: Finished running node model.online_payment.svr_imbalance_transactions
+[0m22:22:06.828906 [debug] [Thread-3 (]: Began running node model.online_payment.invalid_transactions
+[0m22:22:06.829969 [info ] [Thread-3 (]: 4 of 4 START sql table model online_payment_marts.invalid_transactions ......... [RUN]
+[0m22:22:06.831365 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions, now model.online_payment.invalid_transactions)
+[0m22:22:06.832044 [debug] [Thread-3 (]: Began compiling node model.online_payment.invalid_transactions
+[0m22:22:06.836420 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.invalid_transactions"
+[0m22:22:06.838363 [debug] [Thread-3 (]: Timing info for model.online_payment.invalid_transactions (compile): 22:22:06.832460 => 22:22:06.837888
+[0m22:22:06.839036 [debug] [Thread-3 (]: Began executing node model.online_payment.invalid_transactions
+[0m22:22:06.857225 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.invalid_transactions"
+[0m22:22:06.858547 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m22:22:06.939507 [debug] [Thread-3 (]: On model.online_payment.invalid_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.invalid_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_marts`.`invalid_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+  SELECT * FROM `final-project-404104`.`online_payment_transformed`.`svr_imbalance_transactions`
+)
+
+SELECT
+    transactionID,
+    transactionDatetime,
+    CASE
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 21 OR EXTRACT(HOUR FROM transactionDatetime) < 5 THEN 'Night'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 5 AND EXTRACT(HOUR FROM transactionDatetime) < 12 THEN 'Morning'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 12 AND EXTRACT(HOUR FROM transactionDatetime) < 17 THEN 'Afternoon'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 17 AND EXTRACT(HOUR FROM transactionDatetime) < 21 THEN 'Evening'
+    END AS timePeriod,
+    FORMAT_DATE('%A', transactionDatetime) AS day,
+    CASE 
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 7 THEN 'Week 1'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 14 THEN 'Week 2'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 21 THEN 'Week 3'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 28 THEN 'Week 4'
+        ELSE 'Week 5'
+    END AS weekOfMonth,
+    type,
+    amount,
+    nameOrig,
+    oldBalanceOrig,
+    newbalanceOrig,
+    newBalanceOrigValid
+    nameDest,
+    oldbalanceDest,
+    newbalanceDest,
+    newBalanceDestValid
+    isValid,
+    isFraud,
+    isFlaggedFraud
+FROM source
+WHERE isValid = False
+ORDER BY transactionDatetime
+    );
+  
+[0m22:22:07.882125 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:e9ce61cf-1c69-4d10-bf62-7653c6b2350f&page=queryresults
+[0m22:22:08.525422 [debug] [Thread-3 (]: BigQuery adapter: Retry attempt 1 of 1 after error: BadRequest('Unrecognized name: newBalanceOrigValid at [39:5]')
+[0m22:22:09.969160 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:0a78db14-28a9-4db1-b37a-9804dd6dbcfa&page=queryresults
+[0m22:22:10.611182 [error] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:0a78db14-28a9-4db1-b37a-9804dd6dbcfa&page=queryresults
+[0m22:22:10.615530 [debug] [Thread-3 (]: Timing info for model.online_payment.invalid_transactions (execute): 22:22:06.839455 => 22:22:10.614864
+[0m22:22:10.722008 [debug] [Thread-3 (]: Database Error in model invalid_transactions (models/gold/invalid_transactions.sql)
+  Unrecognized name: newBalanceOrigValid at [39:5]
+  compiled Code at target/run/online_payment/models/gold/invalid_transactions.sql
+[0m22:22:10.724249 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'b00d5a5b-686c-4b61-940b-9b07595bbe3c', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1199aa550>]}
+[0m22:22:10.725197 [error] [Thread-3 (]: 4 of 4 ERROR creating sql table model online_payment_marts.invalid_transactions  [[31mERROR[0m in 3.89s]
+[0m22:22:10.726346 [debug] [Thread-3 (]: Finished running node model.online_payment.invalid_transactions
+[0m22:22:10.729357 [debug] [MainThread]: Connection 'master' was properly closed.
+[0m22:22:10.731375 [debug] [MainThread]: Connection 'model.online_payment.svr_imbalance_transactions' was properly closed.
+[0m22:22:10.731961 [debug] [MainThread]: Connection 'list_final-project-404104_online_payment_marts' was properly closed.
+[0m22:22:10.732436 [debug] [MainThread]: Connection 'model.online_payment.invalid_transactions' was properly closed.
+[0m22:22:10.733021 [info ] [MainThread]: 
+[0m22:22:10.733689 [info ] [MainThread]: Finished running 2 view models, 2 table models in 0 hours 0 minutes and 33.66 seconds (33.66s).
+[0m22:22:10.735599 [debug] [MainThread]: Command end result
+[0m22:22:10.762949 [info ] [MainThread]: 
+[0m22:22:10.765117 [info ] [MainThread]: [31mCompleted with 1 error and 0 warnings:[0m
+[0m22:22:10.766861 [info ] [MainThread]: 
+[0m22:22:10.767649 [error] [MainThread]:   Database Error in model invalid_transactions (models/gold/invalid_transactions.sql)
+  Unrecognized name: newBalanceOrigValid at [39:5]
+  compiled Code at target/run/online_payment/models/gold/invalid_transactions.sql
+[0m22:22:10.768376 [info ] [MainThread]: 
+[0m22:22:10.779615 [info ] [MainThread]: Done. PASS=3 WARN=0 ERROR=1 SKIP=0 TOTAL=4
+[0m22:22:10.784189 [debug] [MainThread]: Resource report: {"command_name": "run", "command_wall_clock_time": 36.26152, "process_user_time": 6.573733, "process_kernel_time": 1.227407, "process_mem_max_rss": "192696320", "command_success": false, "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m22:22:10.785157 [debug] [MainThread]: Command `dbt run` failed at 22:22:10.784910 after 36.26 seconds
+[0m22:22:10.786357 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10b57db10>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10baf8450>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x10b770410>]}
+[0m22:22:10.788215 [debug] [MainThread]: Flushing usage events
+[0m22:24:27.278862 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x111888c10>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11150c710>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x111880c90>]}
+
+
+============================== 22:24:27.287624 | cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507 ==============================
+[0m22:24:27.287624 [info ] [MainThread]: Running with dbt=1.7.2
+[0m22:24:27.288635 [debug] [MainThread]: running dbt with arguments {'printer_width': '80', 'indirect_selection': 'eager', 'write_json': 'True', 'log_cache_events': 'False', 'partial_parse': 'True', 'cache_selected_only': 'False', 'warn_error': 'None', 'version_check': 'True', 'fail_fast': 'False', 'log_path': '/Users/rennykurniasari/Desktop/DF11/final_project/dbt/online_payment/logs', 'profiles_dir': '/Users/rennykurniasari/.dbt', 'debug': 'False', 'use_colors': 'True', 'use_experimental_parser': 'False', 'no_print': 'None', 'quiet': 'False', 'warn_error_options': 'WarnErrorOptions(include=[], exclude=[])', 'invocation_command': 'dbt run --select +invalid_transactions', 'log_format': 'default', 'static_parser': 'True', 'target_path': 'None', 'introspect': 'True', 'send_anonymous_usage_stats': 'True'}
+[0m22:24:28.916400 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'project_id', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f09eb90>]}
+[0m22:24:29.184337 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'adapter_info', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11cff5110>]}
+[0m22:24:29.186096 [info ] [MainThread]: Registered adapter: bigquery=1.6.7
+[0m22:24:29.229055 [debug] [MainThread]: checksum: 61e99fc04fd80d06ce91efefd25c0802dcce8a048167599a1a188233d6ce8ed9, vars: {}, profile: , target: , version: 1.7.2
+[0m22:24:29.341673 [debug] [MainThread]: Partial parsing enabled: 0 files deleted, 0 files added, 1 files changed.
+[0m22:24:29.342587 [debug] [MainThread]: Partial parsing: updated file: online_payment://models/gold/invalid_transactions.sql
+[0m22:24:29.609358 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'load_project', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f6fbf50>]}
+[0m22:24:29.638658 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'resource_counts', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f61c150>]}
+[0m22:24:29.639308 [info ] [MainThread]: Found 21 models, 9 sources, 0 exposures, 0 metrics, 444 macros, 0 groups, 0 semantic models
+[0m22:24:29.639948 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f51f0d0>]}
+[0m22:24:29.643217 [info ] [MainThread]: 
+[0m22:24:29.644797 [debug] [MainThread]: Acquiring new bigquery connection 'master'
+[0m22:24:29.648772 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:24:29.650742 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:24:29.652014 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:24:29.653671 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:24:29.654919 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:24:29.656439 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:24:30.746838 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_raw)
+[0m22:24:30.748462 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_transformed)
+[0m22:24:30.749396 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:24:30.750491 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_marts)
+[0m22:24:30.751259 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:24:30.752657 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:24:31.417986 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f345910>]}
+[0m22:24:31.419730 [info ] [MainThread]: Concurrency: 3 threads (target='dev')
+[0m22:24:31.420550 [info ] [MainThread]: 
+[0m22:24:31.424516 [debug] [Thread-1 (]: Began running node model.online_payment.brz_transactions_merge
+[0m22:24:31.425239 [info ] [Thread-1 (]: 1 of 5 START sql view model online_payment_raw.brz_transactions_merge .......... [RUN]
+[0m22:24:31.426248 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_raw, now model.online_payment.brz_transactions_merge)
+[0m22:24:31.426768 [debug] [Thread-1 (]: Began compiling node model.online_payment.brz_transactions_merge
+[0m22:24:31.473360 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.brz_transactions_merge"
+[0m22:24:31.478008 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_transactions_merge (compile): 22:24:31.427083 => 22:24:31.477421
+[0m22:24:31.478866 [debug] [Thread-1 (]: Began executing node model.online_payment.brz_transactions_merge
+[0m22:24:31.537625 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.brz_transactions_merge"
+[0m22:24:31.540212 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:24:31.601509 [debug] [Thread-1 (]: On model.online_payment.brz_transactions_merge: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions_merge"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+  OPTIONS()
+  as SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_1`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_2`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_3`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_4`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_5`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_6`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_7`
+ORDER BY step;
+
+
+[0m22:24:32.343875 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:d8ac9922-e9ff-4523-98df-13debe8abb49&page=queryresults
+[0m22:24:33.043014 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_transactions_merge (execute): 22:24:31.479299 => 22:24:33.042728
+[0m22:24:33.044010 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f888fd0>]}
+[0m22:24:33.044804 [info ] [Thread-1 (]: 1 of 5 OK created sql view model online_payment_raw.brz_transactions_merge ..... [[32mCREATE VIEW (0 processed)[0m in 1.62s]
+[0m22:24:33.045765 [debug] [Thread-1 (]: Finished running node model.online_payment.brz_transactions_merge
+[0m22:24:33.047031 [debug] [Thread-3 (]: Began running node model.online_payment.brz_transactions
+[0m22:24:33.048307 [info ] [Thread-3 (]: 2 of 5 START sql view model online_payment_raw.brz_transactions ................ [RUN]
+[0m22:24:33.049839 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_marts, now model.online_payment.brz_transactions)
+[0m22:24:33.050732 [debug] [Thread-3 (]: Began compiling node model.online_payment.brz_transactions
+[0m22:24:33.056728 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.brz_transactions"
+[0m22:24:33.058179 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (compile): 22:24:33.051290 => 22:24:33.057844
+[0m22:24:33.058665 [debug] [Thread-3 (]: Began executing node model.online_payment.brz_transactions
+[0m22:24:33.062501 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.brz_transactions"
+[0m22:24:33.064156 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m22:24:33.126177 [debug] [Thread-3 (]: On model.online_payment.brz_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions`
+  OPTIONS()
+  as WITH NumberedRows AS (
+
+    SELECT
+        *,
+        ROW_NUMBER() OVER (ORDER BY payment_datetime) AS row_num
+    FROM `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+
+)
+
+SELECT
+    CONCAT('P', LPAD(CAST(row_num AS STRING), 10, '0'), '_', FORMAT_TIMESTAMP('%Y%m%d%H%M%S', payment_datetime)) AS transactionID,
+    payment_datetime as transactionDatetime,
+    type,
+    ROUND(amount, 2) as amount,
+    nameOrig,
+    ROUND(oldbalanceOrg, 2) as oldBalanceOrig,
+    ROUND(newbalanceOrig, 2) as newBalanceOrig,
+    nameDest,
+    ROUND(oldbalanceDest, 2) as oldBalanceDest,
+    ROUND(newbalanceDest, 2) as newBalanceDest,
+    CAST(isFraud as BOOLEAN) as isFraud,
+    CAST(isFlaggedFraud as BOOLEAN) as isFlaggedFraud,
+    step
+FROM
+    NumberedRows
+ORDER BY transactionID;
+
+
+[0m22:24:33.939295 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:f9cfae5b-1bbd-4ba5-8d3f-89ce66102a05&page=queryresults
+[0m22:24:34.602859 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (execute): 22:24:33.058967 => 22:24:34.602204
+[0m22:24:34.604728 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f63abd0>]}
+[0m22:24:34.605928 [info ] [Thread-3 (]: 2 of 5 OK created sql view model online_payment_raw.brz_transactions ........... [[32mCREATE VIEW (0 processed)[0m in 1.56s]
+[0m22:24:34.607548 [debug] [Thread-3 (]: Finished running node model.online_payment.brz_transactions
+[0m22:24:34.609002 [debug] [Thread-1 (]: Began running node model.online_payment.svr_imbalance_transactions
+[0m22:24:34.609911 [info ] [Thread-1 (]: 3 of 5 START sql table model online_payment_transformed.svr_imbalance_transactions  [RUN]
+[0m22:24:34.611326 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions_merge, now model.online_payment.svr_imbalance_transactions)
+[0m22:24:34.612070 [debug] [Thread-1 (]: Began compiling node model.online_payment.svr_imbalance_transactions
+[0m22:24:34.623359 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.svr_imbalance_transactions"
+[0m22:24:34.624877 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_imbalance_transactions (compile): 22:24:34.612558 => 22:24:34.624525
+[0m22:24:34.625369 [debug] [Thread-1 (]: Began executing node model.online_payment.svr_imbalance_transactions
+[0m22:24:34.643151 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:24:35.328513 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.svr_imbalance_transactions"
+[0m22:24:35.330164 [debug] [Thread-1 (]: On model.online_payment.svr_imbalance_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_imbalance_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_imbalance_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+imbalance_transactions AS (
+    SELECT
+        transactionID,
+        transactionDatetime,
+        type,
+        ROUND(amount, 2) as amount,
+        nameOrig,
+        ROUND(oldBalanceOrig, 2) as oldBalanceOrig,
+        ROUND(newbalanceOrig, 2) as newbalanceOrig,
+        nameDest,
+        ROUND(oldbalanceDest, 2) as oldbalanceDest,
+        ROUND(newbalanceDest, 2) as newbalanceDest,
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            
+    (ABS(oldBalanceOrig - amount - newBalanceOrig) <= 0.01 OR
+    ROUND(oldBalanceOrig - amount, 2) = ROUND(newBalanceOrig, 2)) AND
+    (ABS(oldBalanceDest + amount - newBalanceDest) <= 0.01 OR
+    ROUND(oldBalanceDest + amount, 2) = ROUND(newBalanceDest, 2))
+ THEN True
+
+            WHEN type = 'CASH_IN' AND
+            
+    (ABS(oldBalanceOrig + amount - newBalanceOrig) <= 0.01 OR
+    ROUND(oldBalanceOrig + amount, 2) = ROUND(newBalanceOrig, 2)) AND
+    (ABS(oldBalanceDest - amount - newBalanceDest) <= 0.01 OR
+    ROUND(oldBalanceDest - amount, 2) = ROUND(newBalanceDest, 2))
+ THEN True
+
+            ELSE False
+
+        END AS isValid,
+        isFraud,
+        isFlaggedFraud
+    FROM source
+)
+
+SELECT * FROM imbalance_transactions
+ORDER BY transactionID
+    );
+  
+[0m22:24:35.988633 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:ec68d3fb-fee2-411e-8202-3f83e0fada24&page=queryresults
+[0m22:25:03.681175 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_imbalance_transactions (execute): 22:24:34.625673 => 22:25:03.680618
+[0m22:25:03.683815 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f8fbbd0>]}
+[0m22:25:03.685165 [info ] [Thread-1 (]: 3 of 5 OK created sql table model online_payment_transformed.svr_imbalance_transactions  [[32mCREATE TABLE (6.4m rows, 597.0 MiB processed)[0m in 29.07s]
+[0m22:25:03.687227 [debug] [Thread-1 (]: Finished running node model.online_payment.svr_imbalance_transactions
+[0m22:25:03.688502 [debug] [Thread-3 (]: Began running node model.online_payment.svr_balancing_transactions
+[0m22:25:03.689311 [info ] [Thread-3 (]: 4 of 5 START sql table model online_payment_transformed.svr_balancing_transactions  [RUN]
+[0m22:25:03.690497 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions, now model.online_payment.svr_balancing_transactions)
+[0m22:25:03.691135 [debug] [Thread-3 (]: Began compiling node model.online_payment.svr_balancing_transactions
+[0m22:25:03.698248 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.svr_balancing_transactions"
+[0m22:25:03.700921 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_balancing_transactions (compile): 22:25:03.691513 => 22:25:03.700489
+[0m22:25:03.701566 [debug] [Thread-3 (]: Began executing node model.online_payment.svr_balancing_transactions
+[0m22:25:03.705456 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m22:25:04.344426 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.svr_balancing_transactions"
+[0m22:25:04.346885 [debug] [Thread-3 (]: On model.online_payment.svr_balancing_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_balancing_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_balancing_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+  SELECT *
+  FROM `final-project-404104`.`online_payment_transformed`.`svr_imbalance_transactions`
+),
+
+balancing_transaction AS (
+    SELECT *,
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            isValid = False THEN ROUND(oldBalanceOrig - amount, 2)
+
+            WHEN type = 'CASH_IN' AND
+            isValid = False THEN ROUND(oldBalanceOrig + amount, 2)
+
+            ELSE newBalanceOrig
+
+        END AS newBalanceOrigValid,
+
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            isValid = False THEN ROUND(oldBalanceDest + amount, 2)
+
+            WHEN type = 'CASH_IN' AND
+            isValid = False THEN ROUND(oldBalanceDest - amount, 2)
+
+            ELSE newBalanceDest
+
+        END AS newBalanceDestValid
+    FROM source
+),
+
+balancing_validation AS (
+    SELECT
+        transactionID,
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            
+    (ABS(oldBalanceOrig - amount - newBalanceOrigValid) <= 0.01 OR
+    ROUND(oldBalanceOrig - amount, 2) = ROUND(newBalanceOrigValid, 2)) AND
+    (ABS(oldBalanceDest + amount - newBalanceDestValid) <= 0.01 OR
+    ROUND(oldBalanceDest + amount, 2) = ROUND(newBalanceDestValid, 2))
+ THEN True
+
+            WHEN type = 'CASH_IN' AND
+            
+    (ABS(oldBalanceOrig + amount - newBalanceOrigValid) <= 0.01 OR
+    ROUND(oldBalanceOrig + amount, 2) = ROUND(newBalanceOrigValid, 2)) AND
+    (ABS(oldBalanceDest - amount - newBalanceDestValid) <= 0.01 OR
+    ROUND(oldBalanceDest - amount, 2) = ROUND(newBalanceDestValid, 2))
+ THEN True
+
+            ELSE False
+
+        END AS isValidUpdate
+    FROM balancing_transaction
+)
+
+SELECT
+    bt.transactionID as transactionID,
+    bt.transactionDatetime,
+    bt.type,
+    bt.amount,
+    bt.nameOrig,
+    bt.oldBalanceOrig,
+    bt.newbalanceOrig,
+    bt.newBalanceOrigValid,
+    bt.nameDest,
+    bt.oldbalanceDest,
+    bt.newbalanceDest,
+    bt.newBalanceDestValid,
+    bt.isValid,
+    bv.isValidUpdate,
+    bt.isFraud,
+    bt.isFlaggedFraud
+FROM balancing_transaction AS bt
+LEFT JOIN balancing_validation AS bv ON bt.transactionID = bv.transactionID
+ORDER BY transactionID
+    );
+  
+[0m22:25:04.988291 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:586b8c23-dbdc-4156-bb4c-dec7f224b1d1&page=queryresults
+[0m22:25:28.948632 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_balancing_transactions (execute): 22:25:03.701948 => 22:25:28.947892
+[0m22:25:28.950723 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f8d6fd0>]}
+[0m22:25:28.951690 [info ] [Thread-3 (]: 4 of 5 OK created sql table model online_payment_transformed.svr_balancing_transactions  [[32mCREATE TABLE (6.4m rows, 688.0 MiB processed)[0m in 25.26s]
+[0m22:25:28.952901 [debug] [Thread-3 (]: Finished running node model.online_payment.svr_balancing_transactions
+[0m22:25:28.955357 [debug] [Thread-1 (]: Began running node model.online_payment.invalid_transactions
+[0m22:25:28.957027 [info ] [Thread-1 (]: 5 of 5 START sql table model online_payment_marts.invalid_transactions ......... [RUN]
+[0m22:25:28.958835 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_imbalance_transactions, now model.online_payment.invalid_transactions)
+[0m22:25:28.960046 [debug] [Thread-1 (]: Began compiling node model.online_payment.invalid_transactions
+[0m22:25:28.968874 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.invalid_transactions"
+[0m22:25:28.971537 [debug] [Thread-1 (]: Timing info for model.online_payment.invalid_transactions (compile): 22:25:28.960731 => 22:25:28.970776
+[0m22:25:28.972929 [debug] [Thread-1 (]: Began executing node model.online_payment.invalid_transactions
+[0m22:25:28.981632 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.invalid_transactions"
+[0m22:25:28.984140 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:25:29.054678 [debug] [Thread-1 (]: On model.online_payment.invalid_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.invalid_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_marts`.`invalid_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+  SELECT * FROM `final-project-404104`.`online_payment_transformed`.`svr_balancing_transactions`
+)
+
+SELECT
+    transactionID,
+    transactionDatetime,
+    CASE
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 21 OR EXTRACT(HOUR FROM transactionDatetime) < 5 THEN 'Night'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 5 AND EXTRACT(HOUR FROM transactionDatetime) < 12 THEN 'Morning'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 12 AND EXTRACT(HOUR FROM transactionDatetime) < 17 THEN 'Afternoon'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 17 AND EXTRACT(HOUR FROM transactionDatetime) < 21 THEN 'Evening'
+    END AS timePeriod,
+    FORMAT_DATE('%A', transactionDatetime) AS day,
+    CASE 
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 7 THEN 'Week 1'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 14 THEN 'Week 2'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 21 THEN 'Week 3'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 28 THEN 'Week 4'
+        ELSE 'Week 5'
+    END AS weekOfMonth,
+    type,
+    amount,
+    nameOrig,
+    oldBalanceOrig,
+    newbalanceOrig,
+    newBalanceOrigValid
+    nameDest,
+    oldbalanceDest,
+    newbalanceDest,
+    newBalanceDestValid
+    isValid,
+    isValidUpdate,
+    isFraud,
+    isFlaggedFraud
+FROM source
+WHERE isValid = False
+ORDER BY transactionDatetime
+    );
+  
+[0m22:25:29.907776 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:5989cf75-da94-4d46-ade2-cf6864dfe0b0&page=queryresults
+[0m22:25:43.234336 [debug] [Thread-1 (]: Timing info for model.online_payment.invalid_transactions (execute): 22:25:28.973979 => 22:25:43.233975
+[0m22:25:43.237139 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'cfe8bcb1-ac66-44f6-aae9-2fd5dbbca507', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f8efc50>]}
+[0m22:25:43.238165 [info ] [Thread-1 (]: 5 of 5 OK created sql table model online_payment_marts.invalid_transactions .... [[32mCREATE TABLE (5.3m rows, 715.4 MiB processed)[0m in 14.28s]
+[0m22:25:43.239206 [debug] [Thread-1 (]: Finished running node model.online_payment.invalid_transactions
+[0m22:25:43.242013 [debug] [MainThread]: Connection 'master' was properly closed.
+[0m22:25:43.242641 [debug] [MainThread]: Connection 'model.online_payment.invalid_transactions' was properly closed.
+[0m22:25:43.243153 [debug] [MainThread]: Connection 'list_final-project-404104_online_payment_transformed' was properly closed.
+[0m22:25:43.243639 [debug] [MainThread]: Connection 'model.online_payment.svr_balancing_transactions' was properly closed.
+[0m22:25:43.244260 [info ] [MainThread]: 
+[0m22:25:43.244949 [info ] [MainThread]: Finished running 2 view models, 3 table models in 0 hours 1 minutes and 13.60 seconds (73.60s).
+[0m22:25:43.246999 [debug] [MainThread]: Command end result
+[0m22:25:43.267118 [info ] [MainThread]: 
+[0m22:25:43.267882 [info ] [MainThread]: [32mCompleted successfully[0m
+[0m22:25:43.268485 [info ] [MainThread]: 
+[0m22:25:43.269117 [info ] [MainThread]: Done. PASS=5 WARN=0 ERROR=0 SKIP=0 TOTAL=5
+[0m22:25:43.273176 [debug] [MainThread]: Resource report: {"command_name": "run", "command_success": true, "command_wall_clock_time": 76.0961, "process_user_time": 7.423862, "process_kernel_time": 1.248494, "process_mem_max_rss": "192131072", "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m22:25:43.274486 [debug] [MainThread]: Command `dbt run` succeeded at 22:25:43.274227 after 76.10 seconds
+[0m22:25:43.275197 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x111428510>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11f83a4d0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11e48ad50>]}
+[0m22:25:43.275856 [debug] [MainThread]: Flushing usage events
+[0m22:33:05.567120 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1146d8c90>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x113c29f90>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x113c2a1d0>]}
+
+
+============================== 22:33:05.577332 | ba119167-c7fd-4c85-89f1-be2522e15cd1 ==============================
+[0m22:33:05.577332 [info ] [MainThread]: Running with dbt=1.7.2
+[0m22:33:05.578776 [debug] [MainThread]: running dbt with arguments {'printer_width': '80', 'indirect_selection': 'eager', 'write_json': 'True', 'log_cache_events': 'False', 'partial_parse': 'True', 'cache_selected_only': 'False', 'warn_error': 'None', 'version_check': 'True', 'fail_fast': 'False', 'log_path': '/Users/rennykurniasari/Desktop/DF11/final_project/dbt/online_payment/logs', 'debug': 'False', 'profiles_dir': '/Users/rennykurniasari/.dbt', 'use_colors': 'True', 'use_experimental_parser': 'False', 'no_print': 'None', 'quiet': 'False', 'log_format': 'default', 'static_parser': 'True', 'introspect': 'True', 'warn_error_options': 'WarnErrorOptions(include=[], exclude=[])', 'target_path': 'None', 'invocation_command': 'dbt run --select +invalid_transactions', 'send_anonymous_usage_stats': 'True'}
+[0m22:33:07.554446 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'project_id', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x122079dd0>]}
+[0m22:33:07.752791 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'adapter_info', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x121a62d50>]}
+[0m22:33:07.755769 [info ] [MainThread]: Registered adapter: bigquery=1.6.7
+[0m22:33:07.789093 [debug] [MainThread]: checksum: 61e99fc04fd80d06ce91efefd25c0802dcce8a048167599a1a188233d6ce8ed9, vars: {}, profile: , target: , version: 1.7.2
+[0m22:33:07.925054 [debug] [MainThread]: Partial parsing enabled: 0 files deleted, 0 files added, 1 files changed.
+[0m22:33:07.926494 [debug] [MainThread]: Partial parsing: updated file: online_payment://models/gold/invalid_transactions.sql
+[0m22:33:08.127917 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'load_project', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1226f60d0>]}
+[0m22:33:08.153062 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'resource_counts', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x122732990>]}
+[0m22:33:08.153804 [info ] [MainThread]: Found 21 models, 9 sources, 0 exposures, 0 metrics, 444 macros, 0 groups, 0 semantic models
+[0m22:33:08.154532 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x122559350>]}
+[0m22:33:08.157367 [info ] [MainThread]: 
+[0m22:33:08.159010 [debug] [MainThread]: Acquiring new bigquery connection 'master'
+[0m22:33:08.161225 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:33:08.162430 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:33:08.162942 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:33:08.163917 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_final-project-404104'
+[0m22:33:08.164589 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:33:08.165384 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m22:33:09.256787 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_transformed)
+[0m22:33:09.258778 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_marts)
+[0m22:33:09.260439 [debug] [ThreadPool]: Re-using an available connection from the pool (formerly list_final-project-404104, now list_final-project-404104_online_payment_raw)
+[0m22:33:09.260979 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:33:09.261620 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:33:09.262159 [debug] [ThreadPool]: Opening a new connection, currently in state closed
+[0m22:33:09.961493 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1224bd410>]}
+[0m22:33:09.963136 [info ] [MainThread]: Concurrency: 3 threads (target='dev')
+[0m22:33:09.964331 [info ] [MainThread]: 
+[0m22:33:09.969967 [debug] [Thread-1 (]: Began running node model.online_payment.brz_transactions_merge
+[0m22:33:09.971010 [info ] [Thread-1 (]: 1 of 5 START sql view model online_payment_raw.brz_transactions_merge .......... [RUN]
+[0m22:33:09.972237 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_transformed, now model.online_payment.brz_transactions_merge)
+[0m22:33:09.972892 [debug] [Thread-1 (]: Began compiling node model.online_payment.brz_transactions_merge
+[0m22:33:10.004606 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.brz_transactions_merge"
+[0m22:33:10.007586 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_transactions_merge (compile): 22:33:09.973268 => 22:33:10.006981
+[0m22:33:10.008380 [debug] [Thread-1 (]: Began executing node model.online_payment.brz_transactions_merge
+[0m22:33:10.054338 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.brz_transactions_merge"
+[0m22:33:10.055477 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:33:10.114335 [debug] [Thread-1 (]: On model.online_payment.brz_transactions_merge: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions_merge"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+  OPTIONS()
+  as SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_1`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_2`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_3`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_4`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_5`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_6`
+UNION ALL
+SELECT * FROM `final-project-404104`.`online_payment`.`online_payment_7`
+ORDER BY step;
+
+
+[0m22:33:10.962193 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:1b14b0f3-bcef-42f5-8e14-9a840dc35618&page=queryresults
+[0m22:33:11.683243 [debug] [Thread-1 (]: Timing info for model.online_payment.brz_transactions_merge (execute): 22:33:10.008906 => 22:33:11.682903
+[0m22:33:11.684402 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x11ae60a50>]}
+[0m22:33:11.685304 [info ] [Thread-1 (]: 1 of 5 OK created sql view model online_payment_raw.brz_transactions_merge ..... [[32mCREATE VIEW (0 processed)[0m in 1.71s]
+[0m22:33:11.686249 [debug] [Thread-1 (]: Finished running node model.online_payment.brz_transactions_merge
+[0m22:33:11.687419 [debug] [Thread-3 (]: Began running node model.online_payment.brz_transactions
+[0m22:33:11.688268 [info ] [Thread-3 (]: 2 of 5 START sql view model online_payment_raw.brz_transactions ................ [RUN]
+[0m22:33:11.689382 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly list_final-project-404104_online_payment_raw, now model.online_payment.brz_transactions)
+[0m22:33:11.689968 [debug] [Thread-3 (]: Began compiling node model.online_payment.brz_transactions
+[0m22:33:11.694541 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.brz_transactions"
+[0m22:33:11.695966 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (compile): 22:33:11.690328 => 22:33:11.695439
+[0m22:33:11.696648 [debug] [Thread-3 (]: Began executing node model.online_payment.brz_transactions
+[0m22:33:11.701305 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.brz_transactions"
+[0m22:33:11.703508 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m22:33:11.762029 [debug] [Thread-3 (]: On model.online_payment.brz_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.brz_transactions"} */
+
+
+  create or replace view `final-project-404104`.`online_payment_raw`.`brz_transactions`
+  OPTIONS()
+  as WITH NumberedRows AS (
+
+    SELECT
+        *,
+        ROW_NUMBER() OVER (ORDER BY payment_datetime) AS row_num
+    FROM `final-project-404104`.`online_payment_raw`.`brz_transactions_merge`
+
+)
+
+SELECT
+    CONCAT('P', LPAD(CAST(row_num AS STRING), 10, '0'), '_', FORMAT_TIMESTAMP('%Y%m%d%H%M%S', payment_datetime)) AS transactionID,
+    payment_datetime as transactionDatetime,
+    type,
+    ROUND(amount, 2) as amount,
+    nameOrig,
+    ROUND(oldbalanceOrg, 2) as oldBalanceOrig,
+    ROUND(newbalanceOrig, 2) as newBalanceOrig,
+    nameDest,
+    ROUND(oldbalanceDest, 2) as oldBalanceDest,
+    ROUND(newbalanceDest, 2) as newBalanceDest,
+    CAST(isFraud as BOOLEAN) as isFraud,
+    CAST(isFlaggedFraud as BOOLEAN) as isFlaggedFraud,
+    step
+FROM
+    NumberedRows
+ORDER BY transactionID;
+
+
+[0m22:33:12.551115 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:e3b63987-4fc8-4c66-a49d-9a37c7689ffd&page=queryresults
+[0m22:33:13.227611 [debug] [Thread-3 (]: Timing info for model.online_payment.brz_transactions (execute): 22:33:11.697057 => 22:33:13.226993
+[0m22:33:13.229686 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x12275bbd0>]}
+[0m22:33:13.230864 [info ] [Thread-3 (]: 2 of 5 OK created sql view model online_payment_raw.brz_transactions ........... [[32mCREATE VIEW (0 processed)[0m in 1.54s]
+[0m22:33:13.232081 [debug] [Thread-3 (]: Finished running node model.online_payment.brz_transactions
+[0m22:33:13.233086 [debug] [Thread-1 (]: Began running node model.online_payment.svr_imbalance_transactions
+[0m22:33:13.234052 [info ] [Thread-1 (]: 3 of 5 START sql table model online_payment_transformed.svr_imbalance_transactions  [RUN]
+[0m22:33:13.235332 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions_merge, now model.online_payment.svr_imbalance_transactions)
+[0m22:33:13.235992 [debug] [Thread-1 (]: Began compiling node model.online_payment.svr_imbalance_transactions
+[0m22:33:13.242551 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.svr_imbalance_transactions"
+[0m22:33:13.245804 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_imbalance_transactions (compile): 22:33:13.236371 => 22:33:13.245083
+[0m22:33:13.246605 [debug] [Thread-1 (]: Began executing node model.online_payment.svr_imbalance_transactions
+[0m22:33:13.261625 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:33:13.914137 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.svr_imbalance_transactions"
+[0m22:33:13.917168 [debug] [Thread-1 (]: On model.online_payment.svr_imbalance_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_imbalance_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_imbalance_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+    SELECT * FROM `final-project-404104`.`online_payment_raw`.`brz_transactions`
+),
+
+imbalance_transactions AS (
+    SELECT
+        transactionID,
+        transactionDatetime,
+        type,
+        ROUND(amount, 2) as amount,
+        nameOrig,
+        ROUND(oldBalanceOrig, 2) as oldBalanceOrig,
+        ROUND(newbalanceOrig, 2) as newbalanceOrig,
+        nameDest,
+        ROUND(oldbalanceDest, 2) as oldbalanceDest,
+        ROUND(newbalanceDest, 2) as newbalanceDest,
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            
+    (ABS(oldBalanceOrig - amount - newBalanceOrig) <= 0.01 OR
+    ROUND(oldBalanceOrig - amount, 2) = ROUND(newBalanceOrig, 2)) AND
+    (ABS(oldBalanceDest + amount - newBalanceDest) <= 0.01 OR
+    ROUND(oldBalanceDest + amount, 2) = ROUND(newBalanceDest, 2))
+ THEN True
+
+            WHEN type = 'CASH_IN' AND
+            
+    (ABS(oldBalanceOrig + amount - newBalanceOrig) <= 0.01 OR
+    ROUND(oldBalanceOrig + amount, 2) = ROUND(newBalanceOrig, 2)) AND
+    (ABS(oldBalanceDest - amount - newBalanceDest) <= 0.01 OR
+    ROUND(oldBalanceDest - amount, 2) = ROUND(newBalanceDest, 2))
+ THEN True
+
+            ELSE False
+
+        END AS isValid,
+        isFraud,
+        isFlaggedFraud
+    FROM source
+)
+
+SELECT * FROM imbalance_transactions
+ORDER BY transactionID
+    );
+  
+[0m22:33:14.588779 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:1562671f-e0de-4188-bd66-4a676c9175ad&page=queryresults
+[0m22:33:40.639421 [debug] [Thread-1 (]: Timing info for model.online_payment.svr_imbalance_transactions (execute): 22:33:13.247015 => 22:33:40.638790
+[0m22:33:40.641510 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x122889810>]}
+[0m22:33:40.642906 [info ] [Thread-1 (]: 3 of 5 OK created sql table model online_payment_transformed.svr_imbalance_transactions  [[32mCREATE TABLE (6.4m rows, 597.0 MiB processed)[0m in 27.41s]
+[0m22:33:40.644775 [debug] [Thread-1 (]: Finished running node model.online_payment.svr_imbalance_transactions
+[0m22:33:40.646212 [debug] [Thread-3 (]: Began running node model.online_payment.svr_balancing_transactions
+[0m22:33:40.647096 [info ] [Thread-3 (]: 4 of 5 START sql table model online_payment_transformed.svr_balancing_transactions  [RUN]
+[0m22:33:40.648409 [debug] [Thread-3 (]: Re-using an available connection from the pool (formerly model.online_payment.brz_transactions, now model.online_payment.svr_balancing_transactions)
+[0m22:33:40.649168 [debug] [Thread-3 (]: Began compiling node model.online_payment.svr_balancing_transactions
+[0m22:33:40.655670 [debug] [Thread-3 (]: Writing injected SQL for node "model.online_payment.svr_balancing_transactions"
+[0m22:33:40.659487 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_balancing_transactions (compile): 22:33:40.649592 => 22:33:40.658834
+[0m22:33:40.660246 [debug] [Thread-3 (]: Began executing node model.online_payment.svr_balancing_transactions
+[0m22:33:40.663731 [debug] [Thread-3 (]: Opening a new connection, currently in state closed
+[0m22:33:41.442055 [debug] [Thread-3 (]: Writing runtime sql for node "model.online_payment.svr_balancing_transactions"
+[0m22:33:41.443692 [debug] [Thread-3 (]: On model.online_payment.svr_balancing_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.svr_balancing_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_transformed`.`svr_balancing_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+  SELECT *
+  FROM `final-project-404104`.`online_payment_transformed`.`svr_imbalance_transactions`
+),
+
+balancing_transaction AS (
+    SELECT *,
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            isValid = False THEN ROUND(oldBalanceOrig - amount, 2)
+
+            WHEN type = 'CASH_IN' AND
+            isValid = False THEN ROUND(oldBalanceOrig + amount, 2)
+
+            ELSE newBalanceOrig
+
+        END AS newBalanceOrigValid,
+
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            isValid = False THEN ROUND(oldBalanceDest + amount, 2)
+
+            WHEN type = 'CASH_IN' AND
+            isValid = False THEN ROUND(oldBalanceDest - amount, 2)
+
+            ELSE newBalanceDest
+
+        END AS newBalanceDestValid
+    FROM source
+),
+
+balancing_validation AS (
+    SELECT
+        transactionID,
+        CASE
+            WHEN type IN ('PAYMENT', 'TRANSFER', 'CASH_OUT', 'DEBIT') AND
+            
+    (ABS(oldBalanceOrig - amount - newBalanceOrigValid) <= 0.01 OR
+    ROUND(oldBalanceOrig - amount, 2) = ROUND(newBalanceOrigValid, 2)) AND
+    (ABS(oldBalanceDest + amount - newBalanceDestValid) <= 0.01 OR
+    ROUND(oldBalanceDest + amount, 2) = ROUND(newBalanceDestValid, 2))
+ THEN True
+
+            WHEN type = 'CASH_IN' AND
+            
+    (ABS(oldBalanceOrig + amount - newBalanceOrigValid) <= 0.01 OR
+    ROUND(oldBalanceOrig + amount, 2) = ROUND(newBalanceOrigValid, 2)) AND
+    (ABS(oldBalanceDest - amount - newBalanceDestValid) <= 0.01 OR
+    ROUND(oldBalanceDest - amount, 2) = ROUND(newBalanceDestValid, 2))
+ THEN True
+
+            ELSE False
+
+        END AS isValidUpdate
+    FROM balancing_transaction
+)
+
+SELECT
+    bt.transactionID as transactionID,
+    bt.transactionDatetime,
+    bt.type,
+    bt.amount,
+    bt.nameOrig,
+    bt.oldBalanceOrig,
+    bt.newbalanceOrig,
+    bt.newBalanceOrigValid,
+    bt.nameDest,
+    bt.oldbalanceDest,
+    bt.newbalanceDest,
+    bt.newBalanceDestValid,
+    bt.isValid,
+    bv.isValidUpdate,
+    bt.isFraud,
+    bt.isFlaggedFraud
+FROM balancing_transaction AS bt
+LEFT JOIN balancing_validation AS bv ON bt.transactionID = bv.transactionID
+ORDER BY transactionID
+    );
+  
+[0m22:33:42.093177 [debug] [Thread-3 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:01489928-8ae9-41f0-89d8-dabe52c11513&page=queryresults
+[0m22:34:14.425858 [debug] [Thread-3 (]: Timing info for model.online_payment.svr_balancing_transactions (execute): 22:33:40.660667 => 22:34:14.425201
+[0m22:34:14.427751 [debug] [Thread-3 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x12287e910>]}
+[0m22:34:14.429066 [info ] [Thread-3 (]: 4 of 5 OK created sql table model online_payment_transformed.svr_balancing_transactions  [[32mCREATE TABLE (6.4m rows, 688.0 MiB processed)[0m in 33.78s]
+[0m22:34:14.430325 [debug] [Thread-3 (]: Finished running node model.online_payment.svr_balancing_transactions
+[0m22:34:14.431518 [debug] [Thread-1 (]: Began running node model.online_payment.invalid_transactions
+[0m22:34:14.432379 [info ] [Thread-1 (]: 5 of 5 START sql table model online_payment_marts.invalid_transactions ......... [RUN]
+[0m22:34:14.433520 [debug] [Thread-1 (]: Re-using an available connection from the pool (formerly model.online_payment.svr_imbalance_transactions, now model.online_payment.invalid_transactions)
+[0m22:34:14.434155 [debug] [Thread-1 (]: Began compiling node model.online_payment.invalid_transactions
+[0m22:34:14.438812 [debug] [Thread-1 (]: Writing injected SQL for node "model.online_payment.invalid_transactions"
+[0m22:34:14.443165 [debug] [Thread-1 (]: Timing info for model.online_payment.invalid_transactions (compile): 22:34:14.434571 => 22:34:14.442497
+[0m22:34:14.444024 [debug] [Thread-1 (]: Began executing node model.online_payment.invalid_transactions
+[0m22:34:14.447816 [debug] [Thread-1 (]: Opening a new connection, currently in state closed
+[0m22:34:16.242473 [debug] [Thread-1 (]: Writing runtime sql for node "model.online_payment.invalid_transactions"
+[0m22:34:16.244662 [debug] [Thread-1 (]: On model.online_payment.invalid_transactions: /* {"app": "dbt", "dbt_version": "1.7.2", "profile_name": "online_payment", "target_name": "dev", "node_id": "model.online_payment.invalid_transactions"} */
+
+  
+    
+
+    create or replace table `final-project-404104`.`online_payment_marts`.`invalid_transactions`
+      
+    
+    
+
+    OPTIONS()
+    as (
+      WITH source AS (
+  SELECT * FROM `final-project-404104`.`online_payment_transformed`.`svr_balancing_transactions`
+)
+
+SELECT
+    transactionID,
+    transactionDatetime,
+    CASE
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 21 OR EXTRACT(HOUR FROM transactionDatetime) < 5 THEN 'Night'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 5 AND EXTRACT(HOUR FROM transactionDatetime) < 12 THEN 'Morning'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 12 AND EXTRACT(HOUR FROM transactionDatetime) < 17 THEN 'Afternoon'
+        WHEN EXTRACT(HOUR FROM transactionDatetime) >= 17 AND EXTRACT(HOUR FROM transactionDatetime) < 21 THEN 'Evening'
+    END AS timePeriod,
+    FORMAT_DATE('%A', transactionDatetime) AS day,
+    CASE 
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 7 THEN 'Week 1'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 14 THEN 'Week 2'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 21 THEN 'Week 3'
+        WHEN EXTRACT(DAY FROM transactionDatetime) <= 28 THEN 'Week 4'
+        ELSE 'Week 5'
+    END AS weekOfMonth,
+    type,
+    amount,
+    nameOrig,
+    oldBalanceOrig,
+    newbalanceOrig,
+    newBalanceOrigValid,
+    nameDest,
+    oldbalanceDest,
+    newbalanceDest,
+    newBalanceDestValid,
+    isValid,
+    isValidUpdate,
+    isFraud,
+    isFlaggedFraud
+FROM source
+WHERE isValid = False
+ORDER BY transactionDatetime
+    );
+  
+[0m22:34:16.883261 [debug] [Thread-1 (]: BigQuery adapter: https://console.cloud.google.com/bigquery?project=final-project-404104&j=bq:US:207d9ef2-866f-462e-8ddc-eb237a80bb48&page=queryresults
+[0m22:34:35.081022 [debug] [Thread-1 (]: Timing info for model.online_payment.invalid_transactions (execute): 22:34:14.444620 => 22:34:35.080386
+[0m22:34:35.083059 [debug] [Thread-1 (]: Sending event: {'category': 'dbt', 'action': 'run_model', 'label': 'ba119167-c7fd-4c85-89f1-be2522e15cd1', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1223bbe10>]}
+[0m22:34:35.084184 [info ] [Thread-1 (]: 5 of 5 OK created sql table model online_payment_marts.invalid_transactions .... [[32mCREATE TABLE (5.3m rows, 791.2 MiB processed)[0m in 20.65s]
+[0m22:34:35.085521 [debug] [Thread-1 (]: Finished running node model.online_payment.invalid_transactions
+[0m22:34:35.088601 [debug] [MainThread]: Connection 'master' was properly closed.
+[0m22:34:35.089207 [debug] [MainThread]: Connection 'model.online_payment.invalid_transactions' was properly closed.
+[0m22:34:35.089719 [debug] [MainThread]: Connection 'list_final-project-404104_online_payment_marts' was properly closed.
+[0m22:34:35.090218 [debug] [MainThread]: Connection 'model.online_payment.svr_balancing_transactions' was properly closed.
+[0m22:34:35.090834 [info ] [MainThread]: 
+[0m22:34:35.091424 [info ] [MainThread]: Finished running 2 view models, 3 table models in 0 hours 1 minutes and 26.93 seconds (86.93s).
+[0m22:34:35.093376 [debug] [MainThread]: Command end result
+[0m22:34:35.107447 [info ] [MainThread]: 
+[0m22:34:35.108143 [info ] [MainThread]: [32mCompleted successfully[0m
+[0m22:34:35.108777 [info ] [MainThread]: 
+[0m22:34:35.109405 [info ] [MainThread]: Done. PASS=5 WARN=0 ERROR=0 SKIP=0 TOTAL=5
+[0m22:34:35.112100 [debug] [MainThread]: Resource report: {"command_name": "run", "command_success": true, "command_wall_clock_time": 89.639145, "process_user_time": 6.845196, "process_kernel_time": 1.246788, "process_mem_max_rss": "192925696", "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m22:34:35.112967 [debug] [MainThread]: Command `dbt run` succeeded at 22:34:35.112776 after 89.64 seconds
+[0m22:34:35.113631 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1146eaa10>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1146d8c90>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x1146b5490>]}
+[0m22:34:35.114203 [debug] [MainThread]: Flushing usage events
