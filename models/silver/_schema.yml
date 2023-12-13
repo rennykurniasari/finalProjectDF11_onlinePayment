@@ -1,0 +1,8 @@
+version: 2
+
+models:
+  - name: svr_imbalance_transactions
+  - name: svr_balancing_transactions
+  - name: svr_customer_segmentation
+  - name: svr_refund_detail
+  - name: svr_fraud_detail

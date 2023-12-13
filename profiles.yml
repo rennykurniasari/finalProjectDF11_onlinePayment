@@ -1,0 +1,16 @@
+online_payment:
+  outputs:
+    dev:
+      dataset: online_payment
+      job_execution_timeout_seconds: 300
+      job_retries: 1
+      keyfile: /Users/rennykurniasari/Desktop/DF11/final_project/dbt/final-project-404104-e6e579c98e82.json
+      location: US
+      method: service-account
+      priority: interactive
+      project: final-project-404104
+      threads: 3
+      type: bigquery
+      dataproc_region: us-central1
+      gcs_bucket: df11_online_payment
+  target: dev

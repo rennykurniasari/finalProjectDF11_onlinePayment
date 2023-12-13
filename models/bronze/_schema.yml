@@ -1,0 +1,7 @@
+version: 2
+
+models:
+  - name: brz_transactions_merge
+  - name: brz_transactions
+  - name: brz_fraud_confirmation
+  - name: brz_email_confirmation
