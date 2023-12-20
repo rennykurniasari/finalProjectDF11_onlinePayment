@@ -1,0 +1,7 @@
+version: 2
+
+models:
+  - name: stg_transactionsMerge
+  - name: stg_transactions
+  - name: stg_fraudConfirmation
+  - name: stg_emailConfirmation

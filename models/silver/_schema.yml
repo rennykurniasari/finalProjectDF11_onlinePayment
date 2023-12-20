@@ -1,0 +1,8 @@
+version: 2
+
+models:
+  - name: int_imbalanceTransactions
+  - name: int_balancingTransactions
+  - name: int_customerSegmentation
+  - name: int_refundDetail
+  - name: int_fraudDetail
